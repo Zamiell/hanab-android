@@ -899,7 +899,16 @@ private fun Stacks(g: GameState, shown: List<Int>, bounds: MutableMap<String, Re
                 contentAlignment = Alignment.Center,
             ) {
                 Pip(s, 16.dp, Modifier.align(Alignment.TopStart).padding(2.dp))
-                OutlinedText(if (shown[i] > 0) live.hanab.client.game.cardRankText(shown[i]) else "", 22.sp)
+                if (g.rules.sudoku && shown[i] > 0) {
+                    // Stacks start anywhere, so the top rank does not say how far along a stack is: the count follows in brackets.
+                    val played = g.stackRanks[i].size - if (shown[i] == g.stackTop(i)) 0 else 1
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                        OutlinedText(live.hanab.client.game.cardRankText(shown[i]), 22.sp)
+                        OutlinedText("($played)", 12.sp, fontWeight = FontWeight.Normal)
+                    }
+                } else {
+                    OutlinedText(if (shown[i] > 0) live.hanab.client.game.cardRankText(shown[i]) else "", 22.sp)
+                }
             }
         }
     }

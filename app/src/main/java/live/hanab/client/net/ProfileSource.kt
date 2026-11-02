@@ -54,7 +54,7 @@ class OnlineSource(private val name: String) : ProfileSource {
                 val variantName = names[row.variant] ?: "Variant ${row.variant}"
                 GameLine(
                     row.id.toLong(), row.date, row.numPlayers, variantName, row.score,
-                    Variants.suits(variantName)?.let { it.size * 5 }, row.others(name),
+                    Variants.suits(variantName)?.let { it.size * Variants.rules(variantName).stackSize }, row.others(name),
                 )
             },
         )

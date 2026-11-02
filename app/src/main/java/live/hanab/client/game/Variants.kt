@@ -87,6 +87,10 @@ data class VariantRules(
     val throwItInAHole: Boolean = false,
     /** Up or Down: a stack starts with a 1, a 5 or a START card and runs up or down from there. */
     val upOrDown: Boolean = false,
+    /** Sudoku: a stack may start on any rank (a different one each) and wraps round from the top rank to 1. */
+    val sudoku: Boolean = false,
+    /** Cards in a stack: 5, or 4 in the four-suit Sudoku variants (no 5s). */
+    val stackSize: Int = 5,
 ) {
     /**
      * Whether the bot library plays this variant. It reads which ranks Pink-, Brown- and Deceptive-Ones touch (and never gave
@@ -95,7 +99,7 @@ data class VariantRules(
     val botCanPlay: Boolean
         get() = clueRanks.isNotEmpty() && !oddsAndEvens && !funnels && !chimneys && !synesthesia &&
             !colorCluesTouchNothing && !rankCluesTouchNothing && !alternatingClues && clueColorsOverride == null &&
-            !cowAndPig && !duck && !throwItInAHole && !upOrDown
+            !cowAndPig && !duck && !throwItInAHole && !upOrDown && !sudoku
 }
 
 /** Suits and variants from the bundled copies of hanab.live's suits.json and variants.json. */
@@ -114,7 +118,7 @@ object Variants {
         "specialRank", "specialRankAllClueColors", "specialRankNoClueColors", "criticalRank", "scarceOnes", "clueStarved",
         "clueRanks", "specialRankAllClueRanks", "specialRankNoClueRanks", "specialRankDeceptive", "oddsAndEvens", "funnels", "chimneys",
         "synesthesia", "colorCluesTouchNothing", "rankCluesTouchNothing", "alternatingClues", "clueColors", "cowAndPig", "duck",
-        "throwItInAHole", "upOrDown",
+        "throwItInAHole", "upOrDown", "sudoku", "stackSize",
     )
     private var rulesByVariant: Map<String, VariantRules> = emptyMap()
 
@@ -203,6 +207,8 @@ object Variants {
                     duck = o.flag("duck"),
                     throwItInAHole = o.flag("throwItInAHole"),
                     upOrDown = o.flag("upOrDown"),
+                    sudoku = o.flag("sudoku"),
+                    stackSize = (o["stackSize"] as? JsonPrimitive)?.content?.toIntOrNull() ?: 5,
                 )
             }
         }

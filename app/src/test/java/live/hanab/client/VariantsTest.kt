@@ -34,9 +34,9 @@ class VariantsTest {
 
     @Test fun variantsWithSpecialRulesOrUnmodelledSuitsAreNot() {
         assertFalse(Variants.isSupported("Not a real variant"))
-        // Anything with one of the rules we do not model is out.
+        // Variants with the rules we model are in, whatever the rule.
         assertTrue(Variants.isSupported("Up or Down (5 Suits)"))
-        assertFalse(Variants.isSupported("Sudoku (5 Suits)"))
+        assertTrue(Variants.isSupported("Sudoku (5 Suits)"))
         assertTrue(Variants.isSupported("Throw It in a Hole (5 Suits)"))
         assertTrue(Variants.isSupported("Orange (5 Suits)"))
     }
@@ -99,7 +99,7 @@ class VariantsTest {
         assertTrue("the bot plays Orange", "Orange (5 Suits)" in Variants.botSupported())
         assertTrue(Variants.info("Orange").inverted && Variants.info("Dark Orange").inverted)
         assertEquals("pips/orange.svg", Variants.pipFile("Orange"))
-        assertEquals(2395, Variants.allSupported().size)
+        assertEquals(2428, Variants.allSupported().size)
     }
 
     @Test fun cowAndPigDuckAndThrowItInAHoleAreModelled() {
@@ -140,6 +140,17 @@ class VariantsTest {
         assertTrue(mixed.values.none { it == "auto" })
         Variants.useVariant("No Variant")
         assertEquals("pips/red.svg", Variants.pipFile("Red"))
+    }
+
+    @Test fun sudokuIsModelled() {
+        for (v in listOf("Sudoku (5 Suits)", "Sudoku (4 Suits)", "Sudoku & Rainbow (4 Suits)")) {
+            assertTrue("$v should be offered", Variants.isSupported(v))
+            assertFalse("the bot does not play $v", v in Variants.botSupported())
+        }
+        assertTrue(Variants.rules("Sudoku (5 Suits)").sudoku)
+        assertEquals(5, Variants.rules("Sudoku (5 Suits)").stackSize)
+        assertEquals(4, Variants.rules("Sudoku (4 Suits)").stackSize)
+        assertEquals(listOf(1, 2, 3, 4), Variants.rules("Sudoku (4 Suits)").clueRanks)
     }
 
     @Test fun onlyVariantsTheBotPlaysCanBeAnalysed() {
