@@ -153,6 +153,21 @@ class VariantsTest {
         assertEquals(listOf(1, 2, 3, 4), Variants.rules("Sudoku (4 Suits)").clueRanks)
     }
 
+    @Test fun theBestScoreOfAVariantIsItsSuitsTimesItsStackSize() {
+        assertEquals(25, Variants.perfectScore("No Variant"))
+        assertEquals(30, Variants.perfectScore("6 Suits"))
+        assertEquals(16, Variants.perfectScore("Sudoku (4 Suits)"))
+        assertEquals(null, Variants.perfectScore("Not a real variant"))
+        // A finished offline game is perfect when it reaches that, not when it reaches its own (shrunk) maximum.
+        val game = live.hanab.client.OfflineGame(
+            id = 1, variant = "No Variant", convention = "HGroup1", names = listOf("a", "b"), human = 0, score = 23, maxScore = 23,
+            endCondition = 1, durationMs = 1000,
+        )
+        assertEquals(25, game.perfectScore)
+        assertFalse(game.perfect)
+        assertTrue(game.copy(score = 25, maxScore = 25).perfect)
+    }
+
     @Test fun onlyVariantsTheBotPlaysCanBeAnalysed() {
         assertTrue(Variants.canAnalyze("No Variant"))
         assertTrue(Variants.canAnalyze("Rainbow-Ones (5 Suits)"))

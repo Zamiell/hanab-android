@@ -37,7 +37,6 @@ fun SettingsDialog(onDismiss: () -> Unit) {
                 SwitchRow("Fireworks background", AppSettings.backdrop, AppSettings::changeBackdrop)
                 SwitchRow("Use simplified card display", AppSettings.simplifiedCards, AppSettings::changeSimplifiedCards)
                 SwitchRow("Suit symbols", AppSettings.pips, AppSettings::changePips)
-                SwitchRow("Colour-blind colours", AppSettings.colorblind, AppSettings::changeColorblind)
                 SwitchRow("Vibration", AppSettings.haptics, AppSettings::changeHaptics)
                 SwitchRow("Keep screen on in games", AppSettings.keepAwake, AppSettings::changeKeepAwake)
 

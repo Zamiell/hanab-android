@@ -122,7 +122,7 @@ fun OutlinedText(
 /** Solid colour for a suit or clue colour name, from suits.json (Rainbow's fills collapse to one colour). */
 fun suitColor(name: String): Color {
     val info = live.hanab.client.game.Variants.info(name)
-    val fills = if (AppSettings.colorblind && info.fillsColorblind.isNotEmpty()) info.fillsColorblind else info.fills
+    val fills = info.fills
     return when {
         fills.size > 1 -> Color(0xFFBA68C8)
         fills.size == 1 -> Color(fills[0])

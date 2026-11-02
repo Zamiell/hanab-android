@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -148,6 +150,28 @@ private fun CreateTableDialog(ui: LobbyUiState, vm: LobbyViewModel, onDismiss: (
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
+/** A small padlock, drawn directly so it does not depend on an icon font. */
+@Composable
+private fun LockIcon(modifier: Modifier, color: Color) {
+    androidx.compose.foundation.Canvas(modifier) {
+        val w = size.width
+        val h = size.height
+        // The shackle: an arch over the body.
+        drawArc(
+            color, startAngle = 180f, sweepAngle = 180f, useCenter = false,
+            topLeft = Offset(w * 0.22f, h * 0.04f), size = androidx.compose.ui.geometry.Size(w * 0.56f, h * 0.7f),
+            style = androidx.compose.ui.graphics.drawscope.Stroke(width = w * 0.13f),
+        )
+        // The body, with a keyhole.
+        drawRoundRect(
+            color, topLeft = Offset(w * 0.1f, h * 0.42f), size = androidx.compose.ui.geometry.Size(w * 0.8f, h * 0.54f),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(w * 0.1f),
+        )
+        drawCircle(Color.Black.copy(alpha = 0.55f), radius = w * 0.08f, center = Offset(w * 0.5f, h * 0.62f))
+        drawRect(Color.Black.copy(alpha = 0.55f), topLeft = Offset(w * 0.46f, h * 0.62f), size = androidx.compose.ui.geometry.Size(w * 0.08f, h * 0.2f))
+    }
+}
+
 @Composable
 private fun TableRow(t: Table, vm: LobbyViewModel, supported: Boolean = true, current: Int? = null) {
     var askPassword by remember { mutableStateOf(false) }
@@ -185,6 +209,8 @@ private fun TableRow(t: Table, vm: LobbyViewModel, supported: Boolean = true, cu
                 TextButton(onClick = { vm.leaveTableById(t.id) }) { Text("Leave") }
             }
             if (supported && !t.running && !t.joined) {
+                // A table with a password: the lock tells you before you tap Join.
+                if (t.passwordProtected) LockIcon(Modifier.padding(end = 8.dp).size(18.dp), Color(0xFFFFB300))
                 Button(onClick = { if (t.passwordProtected) askPassword = !askPassword else vm.joinTable(t.id) }) {
                     Text("Join")
                 }

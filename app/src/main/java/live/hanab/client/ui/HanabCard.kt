@@ -64,8 +64,7 @@ private const val GLOW = 4f
 
 private fun fillsOf(suit: String): List<Color> {
     val info = Variants.info(suit)
-    val fills = if (AppSettings.colorblind && info.fillsColorblind.isNotEmpty()) info.fillsColorblind else info.fills
-    return fills.map { Color(it) }.ifEmpty { listOf(Color(0xFF616161)) }
+    return info.fills.map { Color(it) }.ifEmpty { listOf(Color(0xFF616161)) }
 }
 
 /** The suit colour as the site paints with it: one colour, or an even gradient for Rainbow and the like. */
@@ -201,7 +200,7 @@ private fun DrawScope.drawSuitPips(suit: String, rank: Int, fills: List<Color>, 
             if (rank != 4) pip(0f, 0f, 1.2f)
         }
         // Rank not known yet: one large, faint symbol.
-        else -> pip(0f, 0f, 3f, a = (if (AppSettings.colorblind) 0.4f else 0.1f) * alpha)
+        else -> pip(0f, 0f, 3f, a = 0.1f * alpha)
     }
 }
 

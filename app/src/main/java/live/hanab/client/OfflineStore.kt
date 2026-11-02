@@ -31,7 +31,9 @@ data class OfflineGame(
 ) {
     val players: Int get() = names.size
     val struckOut: Boolean get() = endCondition == 2
-    val perfect: Boolean get() = score == maxScore
+    /** What the variant allows (the game's own [maxScore] shrinks when a critical card is lost, which is not a perfect game). */
+    val perfectScore: Int get() = live.hanab.client.game.Variants.perfectScore(variant) ?: maxScore
+    val perfect: Boolean get() = score == perfectScore
     fun others(): List<String> = names.filterIndexed { i, _ -> i != human }
 }
 

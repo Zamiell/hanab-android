@@ -54,7 +54,7 @@ class OnlineSource(private val name: String) : ProfileSource {
                 val variantName = names[row.variant] ?: "Variant ${row.variant}"
                 GameLine(
                     row.id.toLong(), row.date, row.numPlayers, variantName, row.score,
-                    Variants.suits(variantName)?.let { it.size * Variants.rules(variantName).stackSize }, row.others(name),
+                    Variants.perfectScore(variantName), row.others(name),
                 )
             },
         )
@@ -74,7 +74,7 @@ class OfflineSource(private val context: Context) : ProfileSource {
         return GameLines(
             matching.size,
             matching.drop(page * size).take(size).map { g ->
-                GameLine(g.id, dateOf(g.id), g.players, g.variant, g.score, g.maxScore, g.others(), listOf(g.convention, g.seed).filter { it.isNotEmpty() }.joinToString(" · "), g.convention)
+                GameLine(g.id, dateOf(g.id), g.players, g.variant, g.score, g.perfectScore, g.others(), listOf(g.convention, g.seed).filter { it.isNotEmpty() }.joinToString(" · "), g.convention)
             },
         )
     }
@@ -107,7 +107,7 @@ fun offlineScores(games: List<OfflineGame>): ProfilePage {
         games.minOfOrNull { it.id }?.let { add("First game" to dateOf(it)) }
     }
     val rows = games.groupBy { it.variant }.map { (variant, g) ->
-        val max = g.first().maxScore
+        val max = g.first().perfectScore
         VariantRow(
             variant = variant,
             games = g.size,

@@ -32,8 +32,6 @@ data class SuitInfo(
     val pip: String = "auto",
     /** Only one copy of each rank exists (Black): every card of the suit is critical. */
     val oneOfEach: Boolean = false,
-    /** Alternative fills for colour-blind players (only some colours define one). */
-    val fillsColorblind: List<Int> = emptyList(),
     /** A prism suit: a card is touched by the clue colour that goes with its rank (1 = the first colour, then round). */
     val prism: Boolean = false,
     /** Orange: attempting to play a card of the suit discards it, and attempting to discard it plays it. */
@@ -138,12 +136,6 @@ object Variants {
             val c = o.str("fill")?.let(::parseHex) ?: return@mapNotNull null
             n to c
         }.toMap()
-        val colorFillsCb = Json.parseToJsonElement(colorsText).jsonArray.mapNotNull { el ->
-            val o = el.jsonObject
-            val n = o.str("name") ?: return@mapNotNull null
-            val c = o.str("fillColorblind")?.let(::parseHex) ?: return@mapNotNull null
-            n to c
-        }.toMap()
         val infos = mutableMapOf<String, SuitInfo>()
         for (el in Json.parseToJsonElement(suitsText).jsonArray) {
             val o = el.jsonObject
@@ -156,13 +148,10 @@ object Variants {
                 ?: listOfNotNull(o.str("fill"))).mapNotNull(::parseHex)
             val own = fills.isNotEmpty()
             if (fills.isEmpty()) fills = listOfNotNull(colorFills[name] ?: colors.firstNotNullOfOrNull { colorFills[it] })
-            val fillsCb = if (own) emptyList()
-            else listOfNotNull(colorFillsCb[name] ?: colors.firstNotNullOfOrNull { colorFillsCb[it] })
             infos[name] = SuitInfo(
                 name, colors, allColors, noColors, o.flag("allClueRanks"), o.flag("noClueRanks"), fills,
                 o.str("pip") ?: "auto",
                 o.flag("oneOfEach"),
-                fillsCb,
                 prism = o.flag("prism"),
                 inverted = o.flag("inverted"),
             )
@@ -219,6 +208,9 @@ object Variants {
     }
 
     fun suits(variant: String): List<String>? = suitsByVariant[variant]
+
+    /** The best score [variant] allows: every stack complete (null for a variant we do not know). */
+    fun perfectScore(variant: String): Int? = suits(variant)?.let { it.size * rules(variant).stackSize }
 
     /** The variant the website numbers [id] (the "v0" of a seed like p3v0s258), if there is one. */
     fun nameOfId(id: Int): String? = namesById[id]
