@@ -20,7 +20,6 @@ object AppSettings {
     private lateinit var prefs: SharedPreferences
 
     var pips by mutableStateOf(true); private set
-    var colorblind by mutableStateOf(false); private set
     var outline by mutableStateOf(OutlineStyle.Normal); private set
     var animSpeed by mutableStateOf(AnimSpeed.Normal); private set
     var soundMode by mutableStateOf(SoundMode.All); private set
@@ -46,7 +45,6 @@ object AppSettings {
     fun load(context: Context) {
         prefs = context.getSharedPreferences("hanab_ui", Context.MODE_PRIVATE)
         pips = prefs.getBoolean("pips", true)
-        colorblind = prefs.getBoolean("colorblind", false)
         outline = enumOf("outline", OutlineStyle.Normal)
         animSpeed = enumOf("animSpeed", AnimSpeed.Normal)
         soundMode = enumOf("soundMode", SoundMode.All)
@@ -67,7 +65,6 @@ object AppSettings {
     }
 
     fun changePips(v: Boolean) { pips = v; prefs.edit().putBoolean("pips", v).apply() }
-    fun changeColorblind(v: Boolean) { colorblind = v; prefs.edit().putBoolean("colorblind", v).apply() }
     fun changeOutline(v: OutlineStyle) { outline = v; prefs.edit().putString("outline", v.name).apply() }
     fun changeAnimSpeed(v: AnimSpeed) { animSpeed = v; prefs.edit().putString("animSpeed", v.name).apply() }
     fun changeSoundMode(v: SoundMode) { soundMode = v; prefs.edit().putString("soundMode", v.name).apply() }

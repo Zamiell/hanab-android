@@ -29,7 +29,7 @@ lobby and the same games as everyone on the website.
 - Step back through earlier turns, also during a game. After a game: score, share link, play again,
   and a shared replay that follows the leader.
 - Animations for plays, discards, draws, and the stacks; sounds and vibration taken from the website.
-- Suit symbols on cards (for colour-blind players), a colour-blind palette, tablet and landscape layout.
+- Suit symbols on cards (for colour-blind players), tablet and landscape layout.
   Everything can be switched off or tuned in Settings.
 
 **Variants**
