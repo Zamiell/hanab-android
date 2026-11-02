@@ -520,6 +520,47 @@ class GameStateTest {
         assertEquals(listOf(1, 2, 3, 4, 5, START_RANK), g.ranks)
     }
 
+    private fun sudoku(suits: Int, stackSize: Int): GameState {
+        val infos = (0 until suits).map { live.hanab.client.game.SuitInfo("S$it") }
+        return GameState(
+            tableID = 1, playerNames = listOf("me", "bob"), ourIndex = 0, spectating = false,
+            variantName = "x", suits = infos.map { it.name }, suitInfos = infos,
+            rules = live.hanab.client.game.VariantRules(sudoku = true, stackSize = stackSize),
+        )
+    }
+
+    @Test fun aSudokuStackStartsAnywhereAndWrapsRound() {
+        var g = sudoku(suits = 5, stackSize = 5)
+        assertEquals(listOf(1, 2, 3, 4, 5), g.nextRanks(0))              // any rank may start a stack
+        g = play(g, 0, 3, 0)
+        assertEquals(listOf(4), g.nextRanks(0))
+        assertEquals(listOf(1, 2, 4, 5), g.nextRanks(1))                 // another stack may not start on a 3
+        g = play(g, 0, 4, 1); g = play(g, 0, 5, 2)
+        assertEquals(listOf(1), g.nextRanks(0))                          // wraps round from 5 to 1
+        g = play(g, 0, 1, 3); g = play(g, 0, 2, 4)
+        assertEquals(emptyList<Int>(), g.nextRanks(0))                   // five cards: finished
+        assertEquals(5, g.stacks[0])
+        // The last stack to start has only the one rank left.
+        var last = sudoku(suits = 5, stackSize = 5)
+        listOf(1, 2, 3, 4).forEachIndexed { i, r -> last = play(last, i, r, i) }
+        assertEquals(listOf(5), last.nextRanks(4))
+        // Two copies of every card, so ten a suit.
+        assertEquals(10, g.copies(0, 1) * 5)
+        assertEquals(50, g.totalCards)
+    }
+
+    @Test fun fourSuitSudokuHasNoFivesAndStacksOfFour() {
+        val g = sudoku(suits = 4, stackSize = 4)
+        assertEquals(listOf(1, 2, 3, 4), g.ranks)
+        assertEquals(16, g.perfectScore)
+        assertEquals(32, g.deckSize)                                     // 4 suits of 4 ranks, two copies of each
+        val p = play(g, 0, 3, 0)
+        assertEquals(listOf(4), p.nextRanks(0))
+        val wrapped = play(play(p, 0, 4, 1), 0, 1, 2)
+        assertEquals(listOf(2), wrapped.nextRanks(0))                    // 3, 4, 1, then 2 (never a 5)
+        assertEquals(listOf(1, 2, 4), p.nextRanks(1))
+    }
+
     @Test fun colorMuteOffersNoColourClues() {
         val g = twoSuits(live.hanab.client.game.VariantRules(clueColorsOverride = emptyList()), "Color Mute (2 Suits)")
         assertEquals(emptyList<String>(), g.clueColors)

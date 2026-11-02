@@ -117,7 +117,7 @@ data class GameState(
     val clues: Int = if (rules.clueStarved) 16 else 8,
     val strikes: Int = 0,
     val score: Int = 0,
-    val maxScore: Int = suits.size * 5,
+    val maxScore: Int = suits.size * rules.stackSize,
     val turn: Int = 0,
     val currentPlayer: Int = 0,
     val cardsDrawn: Int = 0,
@@ -189,7 +189,7 @@ data class GameState(
     val deckPlayable: Boolean get() = options.deckPlays && deckSize == 1 && ourTurn
 
     /** The best score the variant allows: 5 per suit. (The server's `maxScore` shrinks as critical cards are lost.) */
-    val perfectScore: Int get() = suits.size * 5
+    val perfectScore: Int get() = suits.size * rules.stackSize
 
     /**
      * What to print after the "/": while playing, the best score still reachable (it drops when a
@@ -236,15 +236,16 @@ data class GameState(
     }
 
     /** The ranks a card can have: 1 to 5, and the START card in Up or Down. */
-    val ranks: List<Int> get() = if (rules.upOrDown) listOf(1, 2, 3, 4, 5, START_RANK) else listOf(1, 2, 3, 4, 5)
+    val ranks: List<Int> get() = ranksOf(rules)
 
     /** Whether any stack runs from 5 down, or either way (Reversed suits, Up or Down). */
-    val directional: Boolean by lazy { rules.upOrDown || suitInfos.any { it.reversed } }
+    val directional: Boolean by lazy { rules.upOrDown || rules.sudoku || suitInfos.any { it.reversed } }
 
     /** The orders of rank the stack of suit [s] can still be played in (every full run that agrees with what is on it). */
     private fun runs(s: Int): List<List<Int>> {
         val played = stackRanks.getOrElse(s) { emptyList() }
         val all = when {
+            rules.sudoku -> sudokuRuns(s, played)
             rules.upOrDown -> listOf(
                 listOf(1, 2, 3, 4, 5), listOf(5, 4, 3, 2, 1), listOf(START_RANK, 2, 3, 4, 5), listOf(START_RANK, 4, 3, 2, 1),
             )
@@ -252,6 +253,19 @@ data class GameState(
             else -> listOf(listOf(1, 2, 3, 4, 5))
         }
         return all.filter { it.take(played.size) == played }
+    }
+
+    /**
+     * Sudoku: a started stack runs on from where it began, wrapping round from the top rank to 1; a stack not started yet
+     * may begin on any rank that no other stack began on.
+     */
+    private fun sudokuRuns(s: Int, played: List<Int>): List<List<Int>> {
+        val n = rules.stackSize
+        fun run(start: Int) = (0 until n).map { (start - 1 + it) % n + 1 }
+        val first = played.firstOrNull()
+        if (first != null) return listOf(run(first))
+        val taken = stackRanks.withIndex().filter { it.index != s }.mapNotNull { it.value.firstOrNull() }.toSet()
+        return ranks.filter { it !in taken }.map(::run)
     }
 
     /** The ranks that can be played on suit [s] right now: the next one up, or down, or any way a new stack can start. */
@@ -668,17 +682,20 @@ data class GameState(
         fun copiesOf(suit: SuitInfo?, rank: Int, rules: VariantRules): Int = when {
             suit?.oneOfEach == true || rank == rules.criticalRank -> 1
             rank == START_RANK -> if (rules.upOrDown) 1 else 0
+            rules.sudoku -> 2
             rank == 1 && (rules.upOrDown || suit?.reversed == true) -> 1
             rank == 1 && rules.scarceOnes -> 2
             rank == 5 && suit?.reversed == true -> 3
             else -> when (rank) { 1 -> 3; 5 -> 1; else -> 2 }
         }
 
+        /** The ranks cards have: 1 to the stack size, and the START card in Up or Down. */
+        fun ranksOf(rules: VariantRules): List<Int> =
+            if (rules.upOrDown) listOf(1, 2, 3, 4, 5, START_RANK) else (1..rules.stackSize).toList()
+
         /** Cards in the whole deck. */
         fun deckCards(suitInfos: List<SuitInfo>, rules: VariantRules): Int =
-            suitInfos.sumOf { suit ->
-                (if (rules.upOrDown) listOf(1, 2, 3, 4, 5, START_RANK) else listOf(1, 2, 3, 4, 5)).sumOf { rank -> copiesOf(suit, rank, rules) }
-            }
+            suitInfos.sumOf { suit -> ranksOf(rules).sumOf { rank -> copiesOf(suit, rank, rules) } }
     }
 }
 
