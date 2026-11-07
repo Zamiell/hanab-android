@@ -91,7 +91,8 @@ class HanabClient {
         if (_state.value != ConnState.Disconnected) return
         _state.value = ConnState.Connecting
         val req = Request.Builder()
-            .url("https://$BASE_HOST/ws")
+            // The WebSocket checks the client version too (since Hanabi-Live/hanabi-live#3254); "bot" skips that check, as at login.
+            .url("https://$BASE_HOST/ws?version=bot")
             .header("Origin", "https://$BASE_HOST")
             .build()
         socket = http.newWebSocket(req, object : WebSocketListener() {

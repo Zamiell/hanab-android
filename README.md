@@ -139,7 +139,7 @@ The game logic has unit tests (`app/src/test`). The screens have no automated te
 
 ## Caveats
 
-- The login sends `version=bot`, which the server accepts in place of the website's version number.
+- The login and the WebSocket connection (`/ws?version=bot`) send `version=bot`, which the server accepts in place of the website's version number.
   Without it, the server rejects clients that are not the current website build.
 - The double-discard sounds and the variant-specific sounds from the website are not implemented.
 
