@@ -5,6 +5,10 @@ package live.hanab.client
  * native/offline. It is packaged for 64-bit ARM phones, and for x86_64 emulators in debug builds; [available] is false anywhere else.
  */
 object NativeOffline {
+    /** The table sizes offline games come in, you included (the same as MIN_PLAYERS and MAX_PLAYERS in native/offline). */
+    const val MIN_PLAYERS = 2
+    const val MAX_PLAYERS = 5
+
     val available: Boolean = try {
         System.loadLibrary("hanab_offline")
         true
