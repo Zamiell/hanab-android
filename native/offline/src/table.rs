@@ -5,7 +5,7 @@
 //! the game screen does not know it is offline. Rules and bot play come from the bot library, driven the
 //! way its self-play does: every seat keeps its own `Game`, from its own point of view.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -107,6 +107,8 @@ struct Table<'a> {
     record: RefCell<Vec<Value>>,
     /// Milliseconds each seat has used: you while the table waited for you, a bot while it was working out its move.
     times: RefCell<Vec<u64>>,
+    /// Where the time not yet given to a player starts; see [`Table::charge`].
+    mark: Cell<Instant>,
     started: Instant,
     started_at_ms: u64,
 }
@@ -194,6 +196,7 @@ impl<'a> Table<'a> {
             names,
             record: RefCell::new(Vec::new()),
             times: RefCell::new(vec![0; num]),
+            mark: Cell::new(Instant::now()),
             started: Instant::now(),
             started_at_ms: 0,
         }
@@ -275,6 +278,7 @@ impl<'a> Table<'a> {
             return End::Closed;
         }
         self.started = Instant::now();
+        self.mark.set(self.started);
         self.started_at_ms = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
 
         loop {
@@ -283,22 +287,17 @@ impl<'a> Table<'a> {
             }
             let current = self.games[0].state.current_player_index;
             let perform = if current == self.human {
-                let waited = Instant::now();
-                let chosen = self.human_move();
-                self.times.borrow_mut()[current] += waited.elapsed().as_millis() as u64;
-                match chosen {
+                match self.human_move() {
                     Some(p) => p,
                     None => return End::Closed,
                 }
             } else {
                 // Thinking can take a while; the app only sees the result. Every bot waits the same
                 // (the "thinking pause", short in fast mode), including the one right after the human.
-                let started = Instant::now();
                 let bot = &self.games[current];
                 let chosen = catch_unwind(AssertUnwindSafe(|| bot.take_action()));
-                self.times.borrow_mut()[current] += started.elapsed().as_millis() as u64;
                 let pause = Duration::from_millis(self.cfg.pace_ms);
-                if let Some(rest) = pause.checked_sub(started.elapsed()) {
+                if let Some(rest) = pause.checked_sub(self.mark.get().elapsed()) {
                     std::thread::sleep(rest);
                 }
                 match chosen {
@@ -314,6 +313,8 @@ impl<'a> Table<'a> {
                 self.finish(current, 4);
                 return End::Over;
             }
+            // The turn is whoever's it is: their thinking, the bots' pause included.
+            self.charge(current);
             if self.apply(current, perform).is_err() {
                 self.finish(current, 4);
                 return End::Over;
@@ -322,6 +323,12 @@ impl<'a> Table<'a> {
                 return End::Over;
             }
         }
+    }
+
+    /// Gives the time since the last call to `player`, so that what the players used adds up to how long the game took.
+    fn charge(&self, player: usize) {
+        let now = Instant::now();
+        self.times.borrow_mut()[player] += now.duration_since(self.mark.replace(now)).as_millis() as u64;
     }
 
     /// Waits for a legal move from the human; says why if one is not.
@@ -482,6 +489,8 @@ impl<'a> Table<'a> {
     }
 
     fn game_over(&self, player: usize, condition: i64) {
+        self.charge(player);
+        let duration: u64 = self.times.borrow().iter().sum();
         let over = json!({"type": "gameOver", "endCondition": condition, "playerIndex": player, "votes": []});
         self.emit(over);
         let turn = json!({"type": "turn", "num": self.games[0].state.turn_count - 1, "currentPlayerIndex": -1});
@@ -492,22 +501,43 @@ impl<'a> Table<'a> {
             // Minus the time used, as the site counts an untimed game: down from 0.
             "type": "playerTimes",
             "playerTimes": self.times.borrow().iter().map(|&ms| -(ms as i64)).collect::<Vec<_>>(),
-            "duration": self.started.elapsed().as_millis() as u64,
+            "duration": duration,
         });
         self.emit(times);
+        // What the bots wrote on the cards, as the site sends everyone's notes when a game ends.
+        let notes = self.bot_notes();
+        self.out.push("noteList", json!({"tableID": TABLE_ID, "notes": notes}));
         // A game that ran its course (not one given up) is handed to the app to keep.
         if condition == 1 || condition == 2 {
             let s = &self.games[0].state;
             self.out.push(
                 "offlineRecord",
                 json!({
-                    "version": 1, "startedAt": self.started_at_ms, "durationMs": self.started.elapsed().as_millis() as u64,
+                    "version": 1, "startedAt": self.started_at_ms, "durationMs": duration,
                     "variant": self.variant.name, "convention": self.cfg.convention, "seed": self.seed,
                     "names": self.names, "human": self.human, "score": s.score(), "maxScore": s.max_score(),
-                    "endCondition": condition, "actions": *self.record.borrow(),
+                    "endCondition": condition, "actions": *self.record.borrow(), "notes": notes,
                 }),
             );
         }
+    }
+
+    /// The notes each bot wrote on the cards, one list per bot with the note of card `order` at that place, the
+    /// way the site sends everyone's notes (`{"name", "notes": [...], "isSpectator"}`).
+    fn bot_notes(&self) -> Vec<Value> {
+        (0..self.cfg.players)
+            .filter(|&seat| seat != self.human)
+            .filter_map(|seat| {
+                let written = &self.games[seat].notes;
+                let mut list = vec![String::new(); self.deck.len()];
+                for (&order, note) in written.iter() {
+                    if let Some(slot) = list.get_mut(order) {
+                        slot.clone_from(&note.full);
+                    }
+                }
+                (!written.is_empty()).then(|| json!({"name": self.names[seat], "notes": list, "isSpectator": false}))
+            })
+            .collect()
     }
 
     /// Ends the game now (the player gave up, or a bot failed): condition 4 is "terminated".
@@ -605,6 +635,10 @@ pub fn run_replay(record: Value, rx: Receiver<Event>, out: Arc<Outbox>) {
         );
         if wait_for("getGameInfo2").is_some() {
             out.push("gameActionList", json!({"tableID": TABLE_ID, "list": record["actions"]}));
+            // Games saved before the bots' notes were kept have none.
+            if let Some(notes) = record["notes"].as_array().filter(|n| !n.is_empty()) {
+                out.push("noteList", json!({"tableID": TABLE_ID, "notes": notes}));
+            }
             // Nothing else is sent; wait until the app goes back.
             while let Ok(Event::Human(..)) = rx.recv() {}
         }
