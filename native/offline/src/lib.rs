@@ -74,8 +74,8 @@ fn start(variants: &str, suits: &str, config: &str) -> Result<i64, String> {
         human_name: c["humanName"].as_str().unwrap_or("You").to_string(),
         pace_ms: c["paceMs"].as_u64().unwrap_or(900),
     };
-    if !(2..=4).contains(&cfg.players) {
-        return Err("Offline games are for 2 to 4 players.".into());
+    if !(2..=5).contains(&cfg.players) {
+        return Err("Offline games are for 2 to 5 players.".into());
     }
     // Reject a bad variant or convention now rather than on the table's own thread.
     let variant = Variant::get(&cfg.variant)?;
@@ -416,6 +416,14 @@ mod tests {
         }
     }
 
+    /// Four bots and you: four cards each, five seats, and the game still runs to its end.
+    #[test]
+    fn plays_a_whole_game_with_four_bots() {
+        let record = play_scripted("No Variant", 5, 11, true).unwrap();
+        assert_eq!(record["names"].as_array().unwrap().len(), 5);
+        assert!(record["endCondition"] == 1 || record["endCondition"] == 2);
+    }
+
     #[test]
     fn plays_a_whole_game_with_bots() {
         let record = play_scripted("No Variant", 3, 5, true).unwrap();
@@ -643,7 +651,7 @@ mod tests {
             if !keys_ok || i % step != 0 || !name.contains(&name_part) || bot_no.iter().any(|b| name.contains(b)) {
                 continue;
             }
-            let players = 2 + played % 3;
+            let players = 2 + played % 4;
             played += 1;
             match play_scripted(name, players, played as u64, false) {
                 Ok(_) => eprintln!("ok   {name} ({players}p)"),
@@ -725,7 +733,7 @@ mod tests {
         }
     }
 
-    /// Every variant the app offers offline, with 2 to 4 players. Slow; run with `--ignored`.
+    /// Every variant the app offers offline, with 2 to 5 players. Slow; run with `--ignored`.
     #[test]
     #[ignore]
     fn plays_every_offered_variant() {
@@ -749,7 +757,7 @@ mod tests {
             if !plain || !suits_ok || bot_no.iter().any(|b| name.contains(b)) {
                 continue;
             }
-            let players = 2 + played % 3;
+            let players = 2 + played % 4;
             played += 1;
             if let Err(e) = play_scripted(name, players, played as u64, false) {
                 failures.push(format!("{name} ({players}p): {e}"));

@@ -154,7 +154,7 @@ class LobbyViewModel(app: Application) : AndroidViewModel(app) {
     private var resumeOnline = false
 
     /**
-     * Sit down with 1 to 3 bots on this phone. [players] counts you; [fast] is the bots' fast mode (no thinking
+     * Sit down with 1 to 4 bots on this phone. [players] counts you; [fast] is the bots' fast mode (no thinking
      * pause). Signing in is not needed; if you are signed in, the connection is closed for the game and
      * restored when you leave it.
      */
@@ -164,9 +164,9 @@ class LobbyViewModel(app: Application) : AndroidViewModel(app) {
         val full = Regex("""^p(\d+)v(\d+)s(.+)$""").find(seed.trim())
         val seedPlayers = full?.groupValues?.get(1)?.toInt()
         val seedVariant = full?.groupValues?.get(2)?.toInt()?.let { Variants.nameOfId(it) }
-        if (full != null && (seedPlayers !in 2..4 || seedVariant == null || seedVariant !in Variants.botSupported())) {
+        if (full != null && (seedPlayers !in 2..5 || seedVariant == null || seedVariant !in Variants.botSupported())) {
             _ui.update {
-                it.copy(error = "Offline games are for 2 to 4 players in a variant the bots can play; that seed is not one (${seed.trim()}).")
+                it.copy(error = "Offline games are for 2 to 5 players in a variant the bots can play; that seed is not one (${seed.trim()}).")
             }
             return
         }

@@ -51,7 +51,7 @@ fun OfflineDialog(
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Players", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
-                    (2..4).forEach { n ->
+                    (2..5).forEach { n ->
                         FilterChip(selected = players == n, onClick = { players = n }, label = { Text("$n") })
                     }
                 }

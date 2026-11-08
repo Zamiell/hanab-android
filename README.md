@@ -81,7 +81,7 @@ Notes:
 
 ## Offline play
 
-"Play offline against bots" (on the login screen, and as "Offline" in the lobby) plays you against 1 to 3 bots on the
+"Play offline against bots" (on the login screen, and as "Offline" in the lobby) plays you against 1 to 4 bots on the
 phone itself, with no account or connection. The bots are [hanab-bot-rs](https://github.com/michielbaird/hanab-bot-rs),
 and a small one-table server in `native/offline` (Rust) deals the game and answers the app with the same messages
 hanab.live sends, so the game screen is the same. It is built for 64-bit ARM phones (every build) and for x86_64 emulators (debug builds only); on other devices the buttons are hidden.
