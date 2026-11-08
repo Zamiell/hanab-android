@@ -420,6 +420,40 @@ mod tests {
         }
     }
 
+    /// The game is over the moment no more points can be gained (every copy of a card the stacks still need is
+    /// gone), not when the last player has had their turn.
+    #[test]
+    fn ends_as_soon_as_no_more_points_can_be_gained() {
+        for players in 2..=3 {
+            for seed in 1..=4 {
+                let record = play_scripted("No Variant", players, seed, false).unwrap();
+                let copies = [0, 3, 2, 2, 2, 1];
+                let mut gone = [[0usize; 6]; 5];
+                let mut stacks = [0usize; 5];
+                let mut max = [5usize; 5];
+                let actions = record["actions"].as_array().unwrap();
+                for (i, a) in actions.iter().enumerate() {
+                    let (Some(suit), Some(rank)) = (a["suitIndex"].as_u64(), a["rank"].as_u64()) else { continue };
+                    let (suit, rank) = (suit as usize, rank as usize);
+                    match a["type"].as_str().unwrap() {
+                        "play" => stacks[suit] = rank,
+                        "discard" => {
+                            gone[suit][rank] += 1;
+                            if gone[suit][rank] == copies[rank] {
+                                max[suit] = max[suit].min(rank - 1);
+                            }
+                        }
+                        _ => continue,
+                    }
+                    if stacks.iter().sum::<usize>() == max.iter().sum::<usize>() {
+                        let later = actions[i + 1..].iter().any(|b| matches!(b["type"].as_str(), Some("play" | "discard" | "clue")));
+                        assert!(!later, "{players} players, seed {seed}: the game went on after no point could be gained");
+                    }
+                }
+            }
+        }
+    }
+
     /// Four bots and you: four cards each, five seats, and the game still runs to its end.
     #[test]
     fn plays_a_whole_game_with_four_bots() {
@@ -445,6 +479,15 @@ mod tests {
         assert!(used.iter().all(|t| t.as_i64().unwrap() <= 0));
         assert!(used.iter().any(|t| t.as_i64().unwrap() < 0));
         assert!(times["duration"].as_u64().unwrap() > 0);
+        // What the players used adds up to how long the game took (the bots' thinking pause is theirs).
+        let total: i64 = used.iter().map(|t| -t.as_i64().unwrap()).sum();
+        assert_eq!(total as u64, times["duration"].as_u64().unwrap());
+        assert_eq!(record["durationMs"], times["duration"]);
+        // The bots' notes are kept with the game (the human wrote none), one list per bot, a slot per card.
+        let notes = record["notes"].as_array().unwrap();
+        assert!(!notes.is_empty() && notes.len() <= 2, "{notes:?}");
+        assert!(notes.iter().all(|n| n["name"] != record["names"][record["human"].as_u64().unwrap() as usize]));
+        assert!(notes.iter().any(|n| n["notes"].as_array().unwrap().iter().any(|t| !t.as_str().unwrap().is_empty())));
         assert_eq!(actions[actions.len() - 2]["currentPlayerIndex"], -1);
         // A replay shows every card, including the ones the human was dealt.
         assert!(actions.iter().filter(|a| a["type"] == "draw").all(|a| a["suitIndex"] != -1));
@@ -461,6 +504,9 @@ mod tests {
         tx.send(Event::Human("getGameInfo2".into(), Value::Null)).unwrap();
         let list: Value = serde_json::from_str(next().strip_prefix("gameActionList ").unwrap()).unwrap();
         assert_eq!(list["list"].as_array().unwrap().len(), actions.len());
+        // The bots' notes follow, for the replay to show.
+        let shown: Value = serde_json::from_str(next().strip_prefix("noteList ").unwrap()).unwrap();
+        assert_eq!(shown["notes"], record["notes"]);
         tx.send(Event::Close).unwrap();
     }
 
