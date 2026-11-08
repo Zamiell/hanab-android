@@ -26,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import live.hanab.client.BotStore
+import live.hanab.client.NativeOffline
 import live.hanab.client.game.Variants
 
 /**
@@ -51,7 +52,7 @@ fun OfflineDialog(
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Players", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
-                    (2..4).forEach { n ->
+                    (NativeOffline.MIN_PLAYERS..NativeOffline.MAX_PLAYERS).forEach { n ->
                         FilterChip(selected = players == n, onClick = { players = n }, label = { Text("$n") })
                     }
                 }

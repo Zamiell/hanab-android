@@ -28,7 +28,7 @@ const TABLE_ID: usize = 1;
 /// What the app asked for.
 pub struct Config {
     pub variant: String,
-    /// Everyone at the table, the human included (2 to 4).
+    /// Everyone at the table, the human included (`MIN_PLAYERS` to `MAX_PLAYERS`).
     pub players: usize,
     pub convention: String,
     /// The part of the seed the player picks (`50` in `p3v0s50`); the table builds the rest. Any text.
