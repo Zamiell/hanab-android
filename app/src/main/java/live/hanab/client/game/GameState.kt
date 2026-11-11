@@ -443,23 +443,30 @@ data class GameState(
                 else stacks.mapIndexed { i, v -> if (i != s) v else if (directional) newRanks[s].size else r }
                 // Throw It in a Hole: the server hides what was played, and the card goes in the hole, not on a stack.
                 val hidden = rules.throwItInAHole && s < 0
+                // Completing a stack gives a clue back (the new server sends no status; the old one did, and sets these too).
+                val completed = s in newStacks.indices && newStacks[s] >= rules.stackSize && stacks.getOrElse(s) { 0 } < rules.stackSize
                 removeFromHand(p, o).copy(
                     cards = cards.reveal(o, s, r),
                     stacks = newStacks,
                     stackRanks = newRanks,
                     hole = if (hidden) hole + o else hole,
-                ).logged("${name(p)} played ${cardName(s, r)}")
+                    clues = if (completed) minOf(maxClues, clues + 1) else clues,
+                    score = newStacks.sum(),
+                ).withReachableScore().logged("${name(p)} played ${cardName(s, r)}")
             }
             "discard" -> {
                 val p = int("playerIndex"); val o = int("order"); val s = int("suitIndex"); val r = int("rank")
                 val failed = a["failed"]?.jsonPrimitive?.booleanOrNull ?: false
                 // An unknown misplay counts as a play in Throw It in a Hole.
                 val hidden = rules.throwItInAHole && failed && s < 0
+                // A misplay is a failed discard: that is a strike. Any other discard gives a clue back.
                 removeFromHand(p, o).copy(
                     cards = cards.reveal(o, s, r),
                     discards = if (hidden) discards else discards + o,
                     hole = if (hidden) hole + o else hole,
-                ).logged("${name(p)} ${if (hidden) "played" else if (failed) "misplayed" else "discarded"} ${cardName(s, r)}")
+                    strikes = if (failed) strikes + 1 else strikes,
+                    clues = if (failed) clues else minOf(maxClues, clues + 1),
+                ).withReachableScore().logged("${name(p)} ${if (hidden) "played" else if (failed) "misplayed" else "discarded"} ${cardName(s, r)}")
             }
             "clue" -> {
                 val clue = a["clue"]!!.jsonObject
@@ -485,6 +492,7 @@ data class GameState(
                 val sound = clueSound(isColor)
                 copy(
                     cards = newCards,
+                    clues = maxOf(0, clues - clueCost),
                     lastClueWasColor = isColor,
                     // Card cycling: the giver's oldest unclued card moves to their newest slot.
                     hands = if (options.cardCycle) hands.mapIndexed { i, h -> if (i == giver) cycleChop(h, newCards) else h } else hands,
@@ -501,7 +509,10 @@ data class GameState(
                 )
             }
             "status" -> copy(clues = int("clues"), score = int("score"), maxScore = int("maxScore"))
-            "strike" -> copy(strikes = int("num"))
+            // The old server announced a strike before the failed discard; the discard counts it now.
+            "strike" -> this
+            // A card whose identity the server tells us (the new server sends this for the deck when a game ends).
+            "cardIdentity" -> copy(cards = cards.reveal(int("order"), int("suitIndex"), int("rank")))
             "turn" -> copy(turn = int("num"), currentPlayer = int("currentPlayerIndex"))
             "gameOver" -> copy(phase = Phase.Over, endCondition = int("endCondition")).logged("Game over")
             // After the last turn: what each player used (or, in a timed game, had left). Seen one step on in a replay.
@@ -512,6 +523,24 @@ data class GameState(
             )
             else -> this
         }
+    }
+
+    /**
+     * The best score still reachable: for each stack, how far it can still go before a rank with no copy left (not on the
+     * stack and not in the discard pile) stands in the way. The old server sent this as `maxScore`; the new one does not.
+     */
+    private fun withReachableScore(): GameState {
+        var total = 0
+        for (s in stacks.indices) {
+            val lines = if (directional) runs(s) else listOf((1..rules.stackSize).toList())
+            val played = if (directional) stackRanks.getOrElse(s) { emptyList() }.size else stacks[s]
+            total += lines.maxOfOrNull { line ->
+                var reach = played
+                while (reach < line.size && remaining(s, line[reach]) > 0) reach++
+                reach
+            } ?: played
+        }
+        return copy(maxScore = total)
     }
 
     /** Never throws: a malformed action is shown in the log instead of killing the update stream. */

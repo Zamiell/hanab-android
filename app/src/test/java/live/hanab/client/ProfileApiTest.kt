@@ -93,12 +93,33 @@ class ProfileApiTest {
     }
 
     @Test fun readsAHistoryRowAsTheSiteSendsIt() {
-        val json = """{"id":2043515,"num_players":2,"score":25,"variant":2197,"users":"RandP, WillFlame","datetime":"2026-10-25 - 01:44:52 UTC","seed":"p2v2197s7","other_scores":8}"""
+        val json = """{"gameId":2063346,"numPlayers":2,"score":25,"variantId":2197,"numGamesOnSeed":8,"playerNames":["RandP","WillFlame"],"finishedAt":"2026-10-25T01:44:52.123Z","seed":"p2v2197s7"}"""
         val row = HanabJson.decodeFromString<HistoryRow>(json)
-        assertEquals(2043515, row.id)
+        assertEquals(2063346, row.id)
         assertEquals(2197, row.variant)
+        assertEquals(2, row.numPlayers)
         assertEquals("2026-10-25", row.date)
         assertEquals(listOf("RandP"), row.others("WillFlame"))
-        assertNotNull(row.users)
+    }
+
+    /** The grid lost its average and strikeout columns, and shows a dash for a table size nobody played. */
+    @Test fun readsTheGridWithoutTheAverageColumns() {
+        val html = """
+            <table class="history"><thead></thead><tbody>
+              <tr>
+                <td><a href="/variant/15">4 Suits</a></td><td class="center">4</td>
+                <td class="center"><strong >20 / 20</strong ><i class="fas fa-check score-modifier green"></i ></td>
+                <td class="center"> &ndash; </td><td class="center"> 0 / 20 </td>
+                <td class="center"> &ndash; </td><td class="center"> &ndash; </td>
+              </tr>
+            </tbody></table>
+        """.trimIndent()
+        val row = parseScores(html)!!.rows.single()
+        assertEquals("4 Suits", row.variant)
+        assertEquals(4, row.games)
+        assertEquals(listOf(20, 0, 0, 0, 0), row.best.map { it.score })
+        assertEquals(listOf(20, 20, 20, 20, 20), row.best.map { it.max })
+        assertNull(row.average)
+        assertNull(row.strikeoutRate)
     }
 }
