@@ -71,13 +71,31 @@ class HanabClient {
     private val _errors = MutableSharedFlow<String>(extraBufferCapacity = 16)
     val errors: SharedFlow<String> = _errors
 
+    /** The website's current version, which the server wants on the login and on the WebSocket (see [siteVersion]). */
+    @Volatile private var version = ""
+
+    /**
+     * The version of the website's client code that is live now: the hash in the name of its script. The server turns
+     * away any client that does not name it (a client that says it is a bot is exempt, but then the account is marked
+     * as a bot for good, which this app, played by people, must not do).
+     */
+    private fun siteVersion(): String? {
+        val html = http.newCall(Request.Builder().url("https://$BASE_HOST/").build()).execute().use { it.body?.string().orEmpty() }
+        return parseSiteVersion(html)
+    }
+
     /** Returns null on success, otherwise a human-readable error. */
     suspend fun login(username: String, password: String): String? = withContext(Dispatchers.IO) {
+        val current = try {
+            siteVersion()
+        } catch (e: Exception) {
+            return@withContext "Network error: ${e.message}"
+        } ?: return@withContext "Could not read the website's version, so the server would refuse this app."
+        version = current
         val body = FormBody.Builder()
             .add("username", username)
             .add("password", password)
-            // The server rejects stale client versions; a client that says it is a bot sends no version.
-            .add("bot", "true")
+            .add("version", current)
             .build()
         val req = Request.Builder().url("https://$BASE_HOST/login").post(body).build()
         try {
@@ -102,8 +120,8 @@ class HanabClient {
         _state.value = ConnState.Connecting
         adapter = WireAdapter()
         val req = Request.Builder()
-            // The WebSocket checks the client version too (since Hanabi-Live/hanabi-live#3254); bot=true skips that check, as at login.
-            .url("https://$BASE_HOST/ws?bot=true")
+            // The WebSocket checks the client version too (since Hanabi-Live/hanabi-live#3254), as the login does.
+            .url("https://$BASE_HOST/ws?version=$version")
             .header("Origin", "https://$BASE_HOST")
             .build()
         socket = http.newWebSocket(req, object : WebSocketListener() {
@@ -190,3 +208,8 @@ class HanabClient {
         _state.value = ConnState.Disconnected
     }
 }
+
+private val SITE_SCRIPT = Regex("""/public/js/bundles/main\.([0-9a-f]+)\.min\.js""")
+
+/** The website's client version in its home page: the hash in the name of the main script; null if there is none. */
+fun parseSiteVersion(html: String): String? = SITE_SCRIPT.find(html)?.groupValues?.get(1)

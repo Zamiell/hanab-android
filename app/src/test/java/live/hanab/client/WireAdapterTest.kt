@@ -212,4 +212,10 @@ class WireAdapterTest {
         assertEquals(listOf(1, 8, 3, 0), moves.map { it["target"]!!.jsonPrimitive.int })
         assertEquals(listOf(1, 0, 0, 3), moves.map { it["value"]!!.jsonPrimitive.int })
     }
+
+    @Test fun theSiteVersionIsTheHashOfItsMainScript() {
+        val html = """<script src="/public/js/bundles/main.5d5aaee6b08749676ef9280a40448cc78aa99890.min.js"></script>"""
+        assertEquals("5d5aaee6b08749676ef9280a40448cc78aa99890", live.hanab.client.net.parseSiteVersion(html))
+        assertNull(live.hanab.client.net.parseSiteVersion("<html>no script</html>"))
+    }
 }

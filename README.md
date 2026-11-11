@@ -139,8 +139,8 @@ The game logic has unit tests (`app/src/test`). The screens have no automated te
 
 ## Caveats
 
-- The login and the WebSocket connection (`/ws?bot=true`) say the client is a bot, which the server accepts in place of the website's version number
-  (without it, it rejects clients that are not the current website build). The server marks the account as a bot the first time.
+- The login and the WebSocket connection (`/ws?version=...`) send the version of the website's client code that is live (read from the home page), as the server rejects
+  any other. The app does not say it is a bot: that would mark the account as a bot for good.
 - The server's WebSocket protocol was rewritten in November 2026 (`tableId`, a `settings` object, events with an `identity`). `net/WireAdapter.kt` turns it into the
   messages the rest of the app reads, and the app's commands into the new ones; the clues, strikes and score are counted from the events, as the website does.
 - The double-discard sounds and the variant-specific sounds from the website are not implemented.
