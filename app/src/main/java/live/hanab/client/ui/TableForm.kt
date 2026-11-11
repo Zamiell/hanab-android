@@ -92,11 +92,6 @@ private val optionRows = listOf(
         { it.speedrun }, { o, v -> o.copy(speedrun = v) },
     ),
     OptionRow(
-        "Card cycling",
-        "Whenever someone gives a clue, their oldest unclued card moves to their newest slot.",
-        { it.cardCycle }, { o, v -> o.copy(cardCycle = v) },
-    ),
-    OptionRow(
         "Bottom-deck blind play",
         "When one card is left in the deck, a player may play it blind, without seeing it.",
         { it.deckPlays }, { o, v -> o.copy(deckPlays = v) },

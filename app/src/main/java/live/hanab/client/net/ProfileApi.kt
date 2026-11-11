@@ -14,23 +14,23 @@ import java.util.concurrent.TimeUnit
 /** One finished game in a player's history, as the site's `/api/v1/history/<name>` lists it. */
 @Serializable
 data class HistoryRow(
-    val id: Int = 0,
-    @SerialName("num_players") val numPlayers: Int = 0,
+    @SerialName("gameId") val id: Int = 0,
+    val numPlayers: Int = 0,
     val score: Int = 0,
     /** The site's variant id; see [ProfileApi.variantNames]. */
-    val variant: Int = 0,
-    /** Everyone at the table, comma-separated. */
-    val users: String = "",
-    /** Like "2026-10-25 - 01:44:52 UTC". */
-    val datetime: String = "",
+    @SerialName("variantId") val variant: Int = 0,
+    /** Everyone at the table. */
+    val playerNames: List<String> = emptyList(),
+    /** Like "2026-10-25T01:44:52.123Z". */
+    val finishedAt: String = "",
 ) {
-    val date: String get() = datetime.substringBefore(" ")
-    fun others(me: String): List<String> = users.split(", ").filter { it.isNotBlank() && !it.equals(me, ignoreCase = true) }
+    val date: String get() = finishedAt.substringBefore("T")
+    fun others(me: String): List<String> = playerNames.filter { it.isNotBlank() && !it.equals(me, ignoreCase = true) }
 }
 
 @Serializable
 private data class HistoryDto(
-    @SerialName("total_rows") val totalRows: Int = 0,
+    val totalRows: Int = 0,
     val rows: List<HistoryRow>? = null,
 )
 
@@ -80,7 +80,7 @@ object ProfileApi {
     }
 
     /** The website's export of a finished game (players, deck and every action), as text. */
-    suspend fun export(id: Long): String = withContext(Dispatchers.IO) { get("https://$BASE_HOST/export/$id", json = false) }
+    suspend fun export(id: Long): String = withContext(Dispatchers.IO) { WireAdapter.legacyExport(get("https://$BASE_HOST/export/$id", json = false)) }
 
     /** Variant id to name, fetched once. */
     suspend fun variantNames(): Map<Int, String> {
@@ -111,9 +111,8 @@ object ProfileApi {
                 .addQueryParameter("page", page.toString())
                 .addQueryParameter("size", HISTORY_PAGE_SIZE.toString())
                 .apply {
-                    // The filter columns are numbered: 1 is the number of players, 3 the variant.
-                    if (players != null) addQueryParameter("fcol[1]", players.toString())
-                    if (variantId != null) addQueryParameter("fcol[3]", variantId.toString())
+                    if (players != null) addQueryParameter("fcol[numPlayers]", players.toString())
+                    if (variantId != null) addQueryParameter("fcol[variant]", variantId.toString())
                 }
                 .build()
             val dto = HanabJson.decodeFromString<HistoryDto>(get(url.toString()))
@@ -142,17 +141,17 @@ fun parseScores(html: String): ProfilePage? {
     val body = html.substring(table).substringAfter("<tbody>", "").substringBefore("</tbody>")
     val rows = ROW.findAll(body).mapNotNull { row ->
         val cells = CELL.findAll(row.groupValues[1]).map { text(it.groupValues[1]) }.toList()
-        if (cells.size < 9) return@mapNotNull null
-        val best = cells.subList(2, 7).map { c ->
-            val m = SCORE.find(c) ?: return@mapNotNull null
-            BestScore(m.groupValues[1].toInt(), m.groupValues[2].toInt())
-        }
+        // The grid has the total and the five best scores; older pages also had the average and the strikeout rate.
+        if (cells.size < 7) return@mapNotNull null
+        // A table size nobody played shows a dash: no score yet, out of what the other sizes show.
+        val found = cells.subList(2, 7).map { c -> SCORE.find(c)?.let { BestScore(it.groupValues[1].toInt(), it.groupValues[2].toInt()) } }
+        val max = found.firstNotNullOfOrNull { it?.max } ?: 0
         VariantRow(
             variant = cells[0],
             games = cells[1].replace(",", "").toIntOrNull() ?: return@mapNotNull null,
-            best = best,
-            average = cells[7].toDoubleOrNull(),
-            strikeoutRate = cells[8].removeSuffix("%").toDoubleOrNull(),
+            best = found.map { it ?: BestScore(0, max) },
+            average = cells.getOrNull(7)?.toDoubleOrNull(),
+            strikeoutRate = cells.getOrNull(8)?.removeSuffix("%")?.toDoubleOrNull(),
         )
     }.toList()
     return ProfilePage(facts, rows)

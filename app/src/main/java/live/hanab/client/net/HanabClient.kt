@@ -59,6 +59,9 @@ class HanabClient {
 
     private var socket: WebSocket? = null
 
+    /** Turns the server's messages into the ones the app reads, and the app's commands into the server's. */
+    private var adapter = WireAdapter()
+
     private val _state = MutableStateFlow(ConnState.Disconnected)
     val state: StateFlow<ConnState> = _state
 
@@ -73,26 +76,34 @@ class HanabClient {
         val body = FormBody.Builder()
             .add("username", username)
             .add("password", password)
-            // The server rejects stale client versions; "bot" skips that check.
-            .add("version", "bot")
+            // The server rejects stale client versions; a client that says it is a bot sends no version.
+            .add("bot", "true")
             .build()
         val req = Request.Builder().url("https://$BASE_HOST/login").post(body).build()
         try {
             http.newCall(req).execute().use { resp: Response ->
                 if (resp.isSuccessful) null
-                else resp.body?.string()?.trim().takeUnless { it.isNullOrEmpty() } ?: "Login failed (${resp.code})"
+                else loginError(resp.body?.string(), resp.code)
             }
         } catch (e: Exception) {
             "Network error: ${e.message}"
         }
     }
 
+    /** What the server said when the login failed: `{"message": "...", "code": "..."}` (with some HTML), or plain text. */
+    private fun loginError(body: String?, code: Int): String {
+        val text = body?.trim().orEmpty()
+        val message = runCatching { HanabJson.parseToJsonElement(text).jsonObject["message"]?.jsonPrimitive?.content }.getOrNull()
+        return (message ?: text).replace(Regex("<[^>]*>"), " ").replace(Regex("""\s+"""), " ").trim().ifEmpty { "Login failed ($code)" }
+    }
+
     fun connect() {
         if (_state.value != ConnState.Disconnected) return
         _state.value = ConnState.Connecting
+        adapter = WireAdapter()
         val req = Request.Builder()
-            // The WebSocket checks the client version too (since Hanabi-Live/hanabi-live#3254); "bot" skips that check, as at login.
-            .url("https://$BASE_HOST/ws?version=bot")
+            // The WebSocket checks the client version too (since Hanabi-Live/hanabi-live#3254); bot=true skips that check, as at login.
+            .url("https://$BASE_HOST/ws?bot=true")
             .header("Origin", "https://$BASE_HOST")
             .build()
         socket = http.newWebSocket(req, object : WebSocketListener() {
@@ -101,7 +112,7 @@ class HanabClient {
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                unpack(text)?.let { _messages.tryEmit(it) }
+                unpack(text)?.let { m -> adapter.inbound(m).forEach { _messages.tryEmit(it) } }
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
@@ -120,7 +131,9 @@ class HanabClient {
             NativeOffline.send(offlineHandle, command, data?.toString() ?: "{}")
             return
         }
-        socket?.send(pack(command, data))
+        adapter.outbound(command, data).forEach { (c, d) ->
+            socket?.send(pack(c, d))
+        }
     }
 
     // ------------------------------------------------------------ offline play
