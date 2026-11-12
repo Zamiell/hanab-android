@@ -7,3 +7,8 @@
 *.jar binary
 *.mp3 binary
 *.png binary
+
+# Generated from the website's protocol (scripts/protocol.ps1 gen): collapsed in diffs and left out of language stats
+app/src/main/java/live/hanab/client/protocol/Protocol.kt linguist-generated=true
+app/src/test/resources/protocol/compatibility.json linguist-generated=true
+*.sh text eol=lf

@@ -1,0 +1,4 @@
+# hanabi_protocol uses edition 2024 (Rust 1.85 or newer); match the offline library's pinned toolchain.
+[toolchain]
+channel = "1.90.0"
+profile = "minimal"
