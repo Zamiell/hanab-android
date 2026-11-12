@@ -130,6 +130,9 @@ reimplemented from the website's shared game code, driven by the server's stream
 | Path | What is there |
 |---|---|
 | `net/` | HTTP login, WebSocket client, message models |
+| `net/WireAdapter.kt` | The website's typed messages to the shapes the app reads, and the app's commands to typed ones |
+| `protocol/Protocol.kt` | Generated: the website's wire protocol as Kotlin types (see "Keeping up with the website's protocol") |
+| `native/protocol` | The generator, and `scripts/protocol.ps1` to run it, bump the pin and check for drift |
 | `game/GameState.kt` | Immutable game state, clue rules, deduction, replay of earlier turns |
 | `game/Variants.kt` | Suits and variants, read from the bundled `suits.json` / `variants.json` |
 | `LobbyViewModel.kt` | Connection, lobby, game and bot state |
@@ -139,11 +142,34 @@ The game logic has unit tests (`app/src/test`). The screens have no automated te
 
 ## Caveats
 
-- The login and the WebSocket connection (`/ws?version=...`) send the version of the website's client code that is live (read from the home page), as the server rejects
-  any other. The app does not say it is a bot: that would mark the account as a bot for good.
-- The server's WebSocket protocol was rewritten in November 2026 (`tableId`, a `settings` object, events with an `identity`). `net/WireAdapter.kt` turns it into the
-  messages the rest of the app reads, and the app's commands into the new ones; the clues, strikes and score are counted from the events, as the website does.
+- The login and the WebSocket connection (`/ws?client=app`) say the client is an app, the website's kind of client for programs
+  that people use: its account stays a normal one, and it needs no version number.
+- The website's WebSocket protocol changes often. The app reads it with Kotlin types generated from the website's own
+  contracts (see "Keeping up with the website's protocol"), and `net/WireAdapter.kt` turns them into the messages the rest of the app reads.
+  The clues, strikes, score and best reachable score are counted from the game's events, as the website does.
 - The double-discard sounds and the variant-specific sounds from the website are not implemented.
+
+## Keeping up with the website's protocol
+
+hanab.live's server owns every message in its Rust crate `hanabi_protocol` (`server/protocol` in
+[Hanabi-Live/hanabi-live](https://github.com/Hanabi-Live/hanabi-live)), and its own generator turns the crate's JSON Schemas
+into TypeScript. `native/protocol` does the same for the app: it depends on the crate at a pinned commit and writes
+`app/src/main/java/live/hanab/client/protocol/Protocol.kt` (kotlinx.serialization types for every message, a typed
+`Inbound`/`Outbound` for every command, and the website's constants). Like the website's generator it fails closed: a schema
+keyword it does not translate stops it, so a change is never dropped silently. The website's shared test cases at the same
+commit are in `app/src/test/resources/protocol` and `ProtocolFixturesTest` runs them against the types.
+
+```powershell
+.\scripts\protocol.ps1 outdated   # has the website that is live changed its protocol since the pin? what changed?
+.\scripts\protocol.ps1 bump       # pin the commit the website is running now, refresh the test cases, regenerate
+.\scripts\protocol.ps1 gen        # regenerate Protocol.kt from the pin
+.\scripts\protocol.ps1 check      # fail if Protocol.kt is not what gen writes (used by CI)
+```
+
+After a bump, `.uild.ps1 testDebugUnitTest` shows what changed: a message the website added or renamed fails the build in
+`WireAdapter.inbound` (which names every message with no catch-all), and a changed field fails where it is read. A GitHub
+Actions job (`.github/workflows/protocol.yml`) checks the generated file on every change and, daily, whether the live website
+still has the pinned protocol. It needs cargo (rustup fetches the pinned toolchain); ordinary builds do not.
 
 ## Licence and credits
 

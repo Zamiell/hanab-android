@@ -106,6 +106,7 @@ object Variants {
     private var suitsByVariant: Map<String, List<String>> = emptyMap()
     private var supportedNames: List<String> = emptyList()
     private var namesById: Map<Int, String> = emptyMap()
+    private var idsByName: Map<String, Int> = emptyMap()
 
     /** Suits we cannot model yet (none at the moment). */
     private val unsupportedSuits = mutableSetOf<String>()
@@ -204,6 +205,7 @@ object Variants {
         suitsByVariant = byName
         rulesByVariant = rules
         namesById = byId
+        idsByName = byId.entries.associate { (id, name) -> name to id }
         supportedNames = ok
     }
 
@@ -214,6 +216,9 @@ object Variants {
 
     /** The variant the website numbers [id] (the "v0" of a seed like p3v0s258), if there is one. */
     fun nameOfId(id: Int): String? = namesById[id]
+
+    /** The id the website gives the variant called [name] (the inverse of [nameOfId]). */
+    fun idOfName(name: String): Int? = idsByName[name]
 
     fun info(suit: String): SuitInfo = suitInfos[suit] ?: SuitInfo(suit)
 

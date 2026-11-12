@@ -5,441 +5,474 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
+import live.hanab.client.game.Variants
+import live.hanab.client.protocol.*
+// The app's own models (Models.kt, the same package) have these names too; these are the website's.
+import live.hanab.client.protocol.ChatList
+import live.hanab.client.protocol.Table
+import live.hanab.client.protocol.User
+import live.hanab.client.protocol.Welcome
 
 /**
- * hanab.live's WebSocket protocol was rewritten (hanabi-live `server/protocol`): camelCase ids (`tableId`), a
- * `settings` object for a table, game events with a nested `identity`, no `status` or `strike` events, and different
- * command names. The rest of the app, and the offline table, still speak the messages of the old server, so this
- * turns the new server's messages into those, and the app's commands into the new ones.
+ * hanab.live's WebSocket protocol keeps changing (hanabi-live `server/protocol`), and its messages are read with the types
+ * generated from the website's own contracts (`protocol/Protocol.kt`, see `scripts/protocol.ps1`). The rest of the app, and
+ * the offline table, still read and write the shapes of the old server (`tableID`, `list`, `status`, ...); this turns the
+ * typed messages of the new server into those, and the app's commands into typed ones.
  *
- * It keeps a little state: the users (the site tells a change of `inactive` by id only), the turn of the game (a clue
- * carries it in the old form) and whether the game is timed (an untimed clock counts up now, and the app reads it as
- * counting down from 0).
+ * Every message of the server is named in [inbound] with no catch-all, so a message the website adds fails the build after
+ * `scripts/protocol.ps1 bump`, and a change to a message's fields fails it where it is read.
+ *
+ * It keeps a little state: our name (a table does not say whether we are at it), who is in a table's pregame (a table
+ * is started with their ids), the turn of the game (a clue carries it in the old form) and whether the game is timed
+ * (an untimed clock counts up, and the app reads it as counting down from 0).
  */
-class WireAdapter {
-    private val users = HashMap<Int, JsonObject>()
+class WireAdapter(
+    private val variantName: (Int) -> String = { Variants.nameOfId(it) ?: "No Variant" },
+    private val variantId: (String) -> Int = { Variants.idOfName(it) ?: 0 },
+) {
+    private var me = ""
     private var turn = 0
     private var timed = false
+    private val pregamePlayers = HashMap<Long, List<UserId>>()
+    private val reported = HashSet<String>()
+
+    /** Whether we have voted to end the game (the vote is sent as a value now, and the app only toggles it). */
+    private var voted = false
 
     /** The old-style messages for one message of the new server (none when the app has no use for it). */
-    fun inbound(m: ServerMessage): List<ServerMessage> {
-        val d = m.data
-        val o = d as? JsonObject
-        fun one(command: String, data: JsonElement?) = listOf(ServerMessage(command, data))
-        return when (m.command) {
-            "welcome" -> o?.let { one("welcome", welcome(it)) }
-            "userList" -> (d as? JsonArray)?.let { arr ->
-                users.clear()
-                val list = arr.mapNotNull { (it as? JsonObject)?.let(::user) }
-                list.forEach { u -> users[u.int("userID") ?: return@forEach] = u }
-                one("userList", JsonArray(list))
-            }
-            "user" -> o?.let { one("user", user(it).also { u -> u.int("userID")?.let { id -> users[id] = u } }) }
-            "userInactive" -> o?.let {
-                val id = it.int("userId") ?: return@let null
-                val old = users[id] ?: return@let null
-                val next = JsonObject(old + ("inactive" to JsonPrimitive(it.bool("inactive"))))
-                users[id] = next
-                one("user", next)
-            }
-            "userLeft" -> o?.let {
-                val id = it.int("userId") ?: return@let null
-                users.remove(id)
-                one("userLeft", buildJsonObject { put("userID", id) })
-            }
-            "tableList" -> (d as? JsonArray)?.let { arr -> one("tableList", JsonArray(arr.mapNotNull { (it as? JsonObject)?.let(::table) })) }
-            "table" -> o?.let { one("table", table(it)) }
-            "tableGone" -> o?.let { one("tableGone", withTableID(it)) }
-            "joined", "left", "boot" -> o?.let { one(m.command, withTableID(it)) }
-            "chat" -> o?.let { one("chat", chat(it)) }
-            "chatList" -> o?.let {
-                one("chatList", buildJsonObject { put("list", JsonArray(it.arr("messages").mapNotNull { c -> (c as? JsonObject)?.let(::chat) })) })
-            }
-            "chatPmHistory" -> o?.let {
-                one("chatPMHistory", buildJsonObject {
-                    put("list", JsonArray(it.arr("messages").mapNotNull { c -> (c as? JsonObject)?.let(::chat) }))
-                    put("hasMore", false)
-                })
-            }
-            "tableStarted" -> o?.let {
-                one("tableStart", buildJsonObject {
-                    put("tableID", it.int("tableId") ?: 0)
-                    put("replay", it.str("stage") == "replay")
-                })
-            }
-            "init" -> o?.let { one("init", init(it)) }
-            "gameEventList" -> o?.let {
-                val list = it.arr("events").mapNotNull { e -> (e as? JsonObject)?.let(::event) }
-                one("gameActionList", buildJsonObject { put("tableID", it.int("tableId") ?: 0); put("list", JsonArray(list)) })
-            }
-            "gameEvent" -> o?.let {
-                val action = (it["event"] as? JsonObject)?.let(::event) ?: return@let null
-                one("gameAction", buildJsonObject { put("tableID", it.int("tableId") ?: 0); put("action", action) })
-            }
-            "noteList" -> o?.let {
-                one("noteList", buildJsonObject {
-                    put("tableID", it.int("tableId") ?: 0)
-                    put("notes", JsonArray(it.arr("notes").mapNotNull { n ->
-                        val p = n as? JsonObject ?: return@mapNotNull null
-                        buildJsonObject {
-                            put("name", p.str("username") ?: "")
-                            put("notes", p["notes"] ?: JsonArray(emptyList()))
-                            put("isSpectator", p.bool("isSpectator"))
-                        }
-                    }))
-                })
-            }
-            "note" -> o?.let {
-                one("note", buildJsonObject {
-                    put("tableID", it.int("tableId") ?: 0)
-                    put("order", it.int("order") ?: 0)
-                    put("notes", JsonArray(it.arr("notes").mapNotNull { n ->
-                        val p = n as? JsonObject ?: return@mapNotNull null
-                        buildJsonObject {
-                            put("name", p.str("username") ?: "")
-                            put("text", p.str("text") ?: "")
-                            put("isSpectator", p.bool("isSpectator"))
-                        }
-                    }))
-                })
-            }
-            "noteListPlayer" -> o?.let {
-                one("noteListPlayer", buildJsonObject { put("tableID", it.int("tableId") ?: 0); put("notes", it["notes"] ?: JsonArray(emptyList())) })
-            }
-            "cardIdentities" -> o?.let {
-                one("cardIdentities", buildJsonObject {
-                    put("tableID", it.int("tableId") ?: 0)
-                    put("cardIdentities", JsonArray(it.arr("identities").map { i ->
-                        val id = i as? JsonObject
-                        buildJsonObject { put("suitIndex", id?.int("suitIndex") ?: -1); put("rank", id?.int("rank") ?: -1) }
-                    }))
-                })
-            }
-            "finishOngoingGame" -> o?.let {
-                one("finishOngoingGame", buildJsonObject {
-                    put("tableID", it.int("tableId") ?: 0)
-                    put("databaseID", it.int("gameId") ?: 0)
-                    put("sharedReplayLeader", (it["sharedReplay"] as? JsonObject)?.str("leader") ?: "")
-                })
-            }
-            "replayAction" -> o?.let {
-                val a = it["action"] as? JsonObject ?: return@let null
-                if (a.str("type") != "turn") return@let null
-                one("replaySegment", buildJsonObject { put("tableID", it.int("tableId") ?: 0); put("segment", a.int("turn") ?: 0) })
-            }
-            "voteChange" -> o?.let { one("voteChange", buildJsonObject { put("vote", it.bool("vote")) }) }
-            "error" -> o?.let { one("error", buildJsonObject { put("error", it.str("message") ?: "") }) }
-            "warning" -> o?.let { one("warning", buildJsonObject { put("warning", it.str("message") ?: "") }) }
-            else -> null
-        } ?: emptyList()
-    }
-
-    /** The new-style commands for one old-style command of the app. */
-    fun outbound(command: String, data: JsonObject?): List<Pair<String, JsonObject?>> {
-        val d = data ?: JsonObject(emptyMap())
-        val id = d.int("tableID")
-        fun ref(name: String) = listOf<Pair<String, JsonObject?>>(name to buildJsonObject { put("tableId", id ?: 0) })
-        return when (command) {
-            "chat" -> {
-                val table = d.str("room")?.removePrefix("table")?.toIntOrNull()
-                listOf("chat" to buildJsonObject {
-                    put("text", d.str("msg") ?: "")
-                    table?.let { put("tableId", it) }
-                })
-            }
-            "chatPM" -> listOf("chatPm" to buildJsonObject {
-                put("recipient", d.str("recipient") ?: "")
-                put("text", d.str("msg") ?: "")
-            })
-            "chatPMHistoryGet" -> listOf("chatPmHistory" to buildJsonObject {
-                put("amount", d.int("amount") ?: 50)
-                d.str("username")?.let { put("username", it) }
-            })
-            "tableCreate" -> listOf("tableCreate" to buildJsonObject {
-                put("settings", settings(d))
-                d.str("password")?.takeIf { it.isNotEmpty() }?.let { put("password", it) }
-            })
-            "tableUpdate" -> listOf("tableUpdate" to buildJsonObject {
-                put("tableId", id ?: 0)
-                put("settings", settings(d))
-            })
-            "tableJoin" -> listOf("tableJoin" to buildJsonObject {
-                put("tableId", id ?: 0)
-                d.str("password")?.takeIf { it.isNotEmpty() }?.let { put("password", it) }
-            })
-            "tableStart" -> ref("tableStart")
-            "tableLeave" -> ref("tableLeave")
-            "tableUnattend" -> ref("tableUnattend")
-            "tableReattend" -> ref("tableReattend")
-            "tableTerminate" -> ref("tableTerminate")
-            "tableVoteForTermination" -> ref("tableTerminateVote")
-            "tableRestart" -> listOf("tableRestart" to buildJsonObject {
-                put("tableId", id ?: 0)
-                put("hidePregame", d.bool("hidePregame"))
-            })
-            "tableSpectate" -> listOf("tableSpectate" to buildJsonObject {
-                put("tableId", id ?: 0)
-                d.int("shadowingPlayerIndex")?.takeIf { it >= 0 }?.let { put("shadowingPlayerIndex", it) }
-            })
-            "getGameInfo1" -> ref("gameInitLoad")
-            "getGameInfo2" -> ref("gameStateLoad")
-            "loaded" -> ref("loaded")
-            "note" -> listOf("note" to buildJsonObject {
-                put("tableId", id ?: 0)
-                put("order", d.int("order") ?: 0)
-                put("text", d.str("note") ?: "")
-            })
-            "replayAction" -> listOf("replayAction" to buildJsonObject {
-                put("tableId", id ?: 0)
-                put("action", buildJsonObject { put("type", "turn"); put("turn", d.int("segment") ?: 0) })
-            })
-            "replayCreate" -> listOf("replayCreate" to buildJsonObject {
-                put("source", buildJsonObject { put("type", "saved"); put("gameId", d.int("databaseID") ?: 0) })
-                put("visibility", d.str("visibility") ?: "solo")
-            })
-            "action" -> listOf("playerAction" to buildJsonObject {
-                put("tableId", id ?: 0)
-                put("action", playerAction(d))
-            })
-            else -> listOf(command to data)
+    fun inbound(m: Inbound): List<ServerMessage> = when (m) {
+        is InWelcome -> {
+            me = m.data.username
+            one("welcome", welcome(m.data))
         }
-    }
-
-    // ------------------------------------------------------------------ inbound pieces
-
-    private fun welcome(w: JsonObject): JsonObject = buildJsonObject {
-        val name = w.str("username") ?: ""
-        put("userID", w.int("userId") ?: 0)
-        put("username", name)
-        put("playingAtTables", JsonArray(w.arr("playingAtTables")))
-        (w["spectatingAtTable"] as? JsonObject)?.let { s ->
-            put("disconSpectatingTable", s.int("tableId") ?: 0)
-            put("disconShadowingSeat", s.int("shadowingPlayerIndex") ?: -1)
+        is InUserList -> one("userList", JsonArray(m.data.users.map(::user)))
+        is InUser -> one("user", user(m.data))
+        is InUserRemoved -> one("userLeft", buildJsonObject { put("userID", m.data.userId) })
+        is InTableList -> one("tableList", JsonArray(m.data.tables.map(::table)))
+        is InTable -> one("table", table(m.data))
+        is InTableRemoved -> one("tableGone", tableRef(m.data))
+        is InTableJoined -> {
+            // Entering a table, and the game starting, are one message now: the stage says which.
+            val joined = ServerMessage("joined", buildJsonObject { put("tableID", m.data.tableId.toInt()) })
+            if (m.data.stage == TableStage.Pregame) listOf(joined)
+            else listOf(joined, ServerMessage("tableStart", buildJsonObject {
+                put("tableID", m.data.tableId.toInt())
+                put("replay", m.data.stage == TableStage.Replay)
+            }))
         }
-        put("randomTableName", "$name's table")
-    }
-
-    private fun user(u: JsonObject): JsonObject = buildJsonObject {
-        val activity = u["activity"] as? JsonObject
-        put("userID", u.int("userId") ?: 0)
-        put("name", u.str("username") ?: "")
-        put("status", when (activity?.str("type")) {
-            "pregame" -> "Pre-Game"
-            "playing" -> "Playing"
-            "spectating" -> "Spectating"
-            "replay" -> "Replay"
-            "sharedReplay" -> "Shared Replay"
-            else -> "Lobby"
+        is InTableLeft -> one("left", tableRef(m.data))
+        is InTableBooted -> one("boot", tableRef(m.data))
+        is InChat -> chat(m.data)?.let { one("chat", it) }.orEmpty()
+        is InChatList -> one("chatList", buildJsonObject { put("list", JsonArray(m.data.messages.mapNotNull(::chat))) })
+        is InGameInit -> one("init", init(m.data))
+        is InGameState -> gameState(m.data)
+        is InGameEvent -> event(m.data.event)?.let {
+            one("gameAction", buildJsonObject { put("tableID", m.data.tableId.toInt()); put("action", it) })
+        }.orEmpty()
+        is InGameFinished -> listOf(
+            ServerMessage("finishOngoingGame", buildJsonObject {
+                put("tableID", m.data.tableId.toInt())
+                put("databaseID", m.data.gameId ?: 0)
+                put("sharedReplayLeader", m.data.sharedReplay.owner.username)
+            }),
+            cardIdentities(m.data.tableId, m.data.deck),
+        )
+        is InNote -> one("note", buildJsonObject {
+            put("tableID", m.data.tableId.toInt())
+            put("order", m.data.order)
+            put("notes", JsonArray(m.data.notes.map { n ->
+                buildJsonObject { put("name", n.username); put("text", n.text); put("isSpectator", n.spectator) }
+            }))
         })
-        activity?.int("tableId")?.let { put("tableID", it) }
-        put("inactive", u.bool("inactive"))
+        is InNoteList -> one("noteList", noteList(m.data.tableId, m.data.notes))
+        is InVotes -> {
+            voted = m.data.voted
+            one("voteChange", buildJsonObject { put("vote", m.data.voted) })
+        }
+        is InReplayAction -> when (val a = m.data.action) {
+            is ReplayLeaderActionTurn ->
+                one("replaySegment", buildJsonObject { put("tableID", m.data.tableId.toInt()); put("segment", a.turn) })
+            else -> emptyList()
+        }
+        is InError -> one("error", buildJsonObject { put("error", m.data.message) })
+        is InWarning -> one("warning", buildJsonObject { put("warning", m.data.message) })
+        is InPregame -> {
+            pregamePlayers[m.data.tableId] = m.data.players.map { it.userId }
+            emptyList()
+        }
+        is InInvalid -> unreadable(m.command, m.error)
+        // The rest the app has no use for (yet).
+        is InUnknown, is InBlocked, is InFriends, is InChatDeleted, is InChatTyping, is InClock, is InConnections,
+        is InGameHistoryAdded, is InIdleReset, is InIdleWarning, is InLobbyStatus, is InPause, is InServerRestart,
+        is InSpectators, is InTableOwner, is InTableRestartDecliners, is InTableSuggestion -> emptyList()
     }
 
-    private fun table(t: JsonObject): JsonObject = buildJsonObject {
-        val s = t["settings"] as? JsonObject
-        val options = s?.get("options") as? JsonObject
-        val players = t.arr("playerNames")
-        val phase = t.str("phase")
-        put("id", t.int("tableId") ?: 0)
-        put("name", s?.str("name") ?: "")
-        put("joined", t.bool("joined"))
-        put("maxPlayers", s?.int("maxPlayers") ?: 5)
-        put("numPlayers", players.size)
-        put("ownerID", t.int("ownerId") ?: 0)
-        put("passwordProtected", t.bool("passwordProtected"))
-        put("players", JsonArray(players))
-        put("progress", t.int("progress") ?: 0)
-        put("running", phase != "pregame")
-        put("sharedReplay", phase == "sharedReplay")
-        put("variant", options?.str("variantName") ?: "No Variant")
-        put("timed", options?.get("timeControl") != null)
+    /** The old-style messages for the reply of the server to a request that has data. */
+    fun reply(r: Reply): List<ServerMessage> = when (r) {
+        is ReplyChatPmHistory -> one("chatPMHistory", buildJsonObject {
+            put("list", JsonArray(r.data.messages.mapNotNull(::chat)))
+            put("hasMore", false)
+        })
+        is ReplyInvalid -> unreadable(r.command, r.error)
+        // The app asks for neither of these.
+        is ReplyGameHistory, is ReplySeedGames -> emptyList()
+    }
+
+    /** The website's protocol is not the one this app was built for. Say so once per message. */
+    private fun unreadable(command: String, error: String): List<ServerMessage> =
+        if (reported.add(command)) {
+            one("error", buildJsonObject {
+                put("error", "The website sent a \"$command\" message this app cannot read, so it has probably changed " +
+                    "its protocol and the app needs an update (${error.lineSequence().first().take(160)}).")
+            })
+        } else emptyList()
+
+    /** The commands of the server for one old-style command of the app. */
+    fun outbound(command: String, d: JsonObject): List<Outbound> {
+        val id = d.int("tableID")?.toLong() ?: 0L
+        fun ref() = TableRef(id)
+        return when (command) {
+            "chat" -> listOf(OutChat(ChatRequest(
+                tableId = d.str("room")?.removePrefix("table")?.toLongOrNull(),
+                text = d.str("msg") ?: "",
+            )))
+            "chatPM" -> listOf(OutChatPm(ChatPmRequest(recipient = d.str("recipient") ?: "", text = d.str("msg") ?: "")))
+            "chatPMHistoryGet" -> listOf(OutChatPmHistory(ChatPmHistoryRequest(limit = d.int("amount") ?: 50, recipient = d.str("username"))))
+            "tableCreate" -> listOf(OutTableCreate(TableCreateRequest(
+                password = d.str("password")?.takeIf { it.isNotEmpty() },
+                settings = settings(d),
+            )))
+            "tableUpdate" -> listOf(OutTableUpdate(TableUpdateRequest(settings = settings(d), tableId = id)))
+            "tableJoin" -> listOf(OutTableJoin(TableJoinRequest(password = d.str("password")?.takeIf { it.isNotEmpty() }, tableId = id)))
+            "tableStart" -> listOf(OutTableStart(TableStartRequest(intendedPlayerIds = pregamePlayers[id].orEmpty(), tableId = id)))
+            "tableLeave" -> listOf(OutTableLeave(ref()))
+            "tableUnattend" -> listOf(OutTableUnattend(ref()))
+            "tableReattend" -> listOf(OutTableReattend(ref()))
+            "tableTerminate" -> listOf(OutTableTerminate(ref()))
+            "tableVoteForTermination" -> listOf(OutTableTerminateVote(TableTerminateVoteRequest(tableId = id, voted = !voted)))
+            "tableRestart" -> listOf(OutTableRestart(TableRestartRequest(startNow = d.bool("hidePregame"), tableId = id)))
+            "tableSpectate" -> listOf(OutTableSpectate(TableSpectateRequest(
+                shadowingPlayerIndex = d.int("shadowingPlayerIndex")?.takeIf { it >= 0 },
+                tableId = id,
+            )))
+            "getGameInfo1" -> listOf(OutGameInitLoad(ref()))
+            "getGameInfo2" -> listOf(OutGameStateLoad(ref()))
+            "loaded" -> listOf(OutGameLoaded(ref()))
+            "note" -> listOf(OutNote(NoteRequest(order = d.int("order") ?: 0, tableId = id, text = d.str("note") ?: "")))
+            "replayAction" -> listOf(OutReplayAction(ReplayAction(action = ReplayLeaderActionTurn(d.int("segment") ?: 0), tableId = id)))
+            "replayCreate" -> listOf(OutReplayCreate(ReplayCreateRequest(
+                source = ReplaySourceSaved(d.int("databaseID") ?: 0),
+                visibility = if (d.str("visibility") == "shared") ReplayVisibilityShared(joinExisting = false, spoilerFree = false) else ReplayVisibilitySolo,
+            )))
+            "action" -> listOf(OutPlayerAction(PlayerActionRequest(action = playerAction(d), tableId = id)))
+            else -> emptyList()
+        }
+    }
+
+    // ------------------------------------------------------------------ messages of the server
+
+    private fun one(command: String, data: JsonElement) = listOf(ServerMessage(command, data))
+
+    private fun tableRef(r: TableRef) = buildJsonObject { put("tableID", r.tableId.toInt()) }
+
+    private fun welcome(w: Welcome): JsonObject = buildJsonObject {
+        put("userID", w.userId)
+        put("username", w.username)
+        put("playingAtTables", JsonArray(w.playingAtTables.map { JsonPrimitive(it.toInt()) }))
+        w.spectatingAtTables.firstOrNull()?.let { s ->
+            put("disconSpectatingTable", s.tableId.toInt())
+            put("disconShadowingSeat", s.shadowingPlayerIndex ?: -1)
+        }
+        put("randomTableName", "${w.username}${ProtocolConstants.DEFAULT_TABLE_NAME_SUFFIX}")
+    }
+
+    private fun user(u: User): JsonObject = buildJsonObject {
+        put("userID", u.userId)
+        put("name", u.username)
+        put("status", when (u.activity) {
+            is ActivityLobby -> "Lobby"
+            is ActivityPregame -> "Pre-Game"
+            is ActivityPlaying -> "Playing"
+            is ActivitySpectating -> "Spectating"
+            is ActivitySoloReplay -> "Replay"
+            is ActivitySharedReplay -> "Shared Replay"
+        })
+        when (val a = u.activity) {
+            is ActivityPregame -> put("tableID", a.tableId.toInt())
+            is ActivityPlaying -> put("tableID", a.tableId.toInt())
+            is ActivitySpectating -> put("tableID", a.tableId.toInt())
+            is ActivitySharedReplay -> put("tableID", a.tableId.toInt())
+            is ActivityLobby, is ActivitySoloReplay -> {}
+        }
+        put("inactive", u.inactive)
+    }
+
+    private fun table(t: Table): JsonObject = buildJsonObject {
+        val options = t.settings.options
+        put("id", t.tableId.toInt())
+        put("name", t.settings.name)
+        put("joined", me.isNotEmpty() && (me in t.playerNames || t.spectators.any { it.username == me }))
+        put("maxPlayers", t.settings.maxPlayers)
+        put("numPlayers", t.playerNames.size)
+        put("ownerID", t.owner.userId)
+        put("passwordProtected", t.passwordProtected)
+        put("players", JsonArray(t.playerNames.map { JsonPrimitive(it) }))
+        put("progress", when (val p = t.phase) {
+            is TablePhasePregame -> 0
+            is TablePhasePlaying -> p.progress
+            is TablePhaseSharedReplay -> p.progress
+        })
+        put("running", t.phase !is TablePhasePregame)
+        put("sharedReplay", t.phase is TablePhaseSharedReplay)
+        put("variant", variantName(options.variantId))
+        put("timed", options.timeControl != null)
         put("options", legacyOptions(options))
-        put("spectators", JsonArray(t.arr("spectators").map { sp ->
-            buildJsonObject { put("name", (sp as? JsonObject)?.str("username") ?: "") }
+        put("spectators", JsonArray(t.spectators.map { s -> buildJsonObject { put("name", s.username) } }))
+    }
+
+    private fun legacyOptions(o: GameOptions): JsonObject = buildJsonObject {
+        put("variantName", variantName(o.variantId))
+        put("timed", o.timeControl != null)
+        put("speedrun", o.speedrun)
+        put("cardCycle", false)
+        put("deckPlays", o.deckPlays)
+        put("emptyClues", o.emptyClues)
+        put("oneExtraCard", o.oneExtraCard)
+        put("oneLessCard", o.oneLessCard)
+        put("allOrNothing", o.allOrNothing)
+        put("detrimentalCharacters", o.detrimentalCharacters)
+    }
+
+    /** A message of the chat, or null for the kinds the app does not show (a suggestion of table settings). */
+    private fun chat(c: Chat): JsonObject? {
+        val author: ChatAuthor
+        var recipient: String? = null
+        when (val k = c.kind) {
+            is ChatKindPublic -> author = k.author
+            is ChatKindPrivate -> { author = k.author; recipient = k.recipient }
+            is ChatKindSettingsSuggestion -> return null
+        }
+        return buildJsonObject {
+            put("msg", c.text)
+            when (author) {
+                is ChatAuthorUser -> { put("who", author.username); put("source", "user") }
+                is ChatAuthorDiscord -> { author.username?.let { put("who", it) }; put("source", "discord") }
+                is ChatAuthorServer -> put("source", "server")
+            }
+            put("datetime", c.sentAt)
+            c.chatId?.let { put("chatID", it.toInt()) }
+            recipient?.let { put("recipient", it) }
+            put("room", c.tableId?.let { "table${it.toInt()}" } ?: "lobby")
+        }
+    }
+
+    private fun init(i: GameInit): JsonObject = buildJsonObject {
+        timed = i.options.timeControl != null
+        turn = 0
+        val mode = i.mode
+        put("tableID", i.tableId.toInt())
+        put("playerNames", JsonArray(i.playerNames.map { JsonPrimitive(it) }))
+        put("ourPlayerIndex", when (mode) {
+            is ViewModePlaying -> mode.ourPlayerIndex
+            is ViewModeShadowing -> mode.ourPlayerIndex
+            is ViewModeSoloReplay -> mode.ourPlayerIndex ?: 0
+            is ViewModeSharedReplay -> mode.ourPlayerIndex ?: 0
+            is ViewModeSpectating -> 0
+        })
+        put("spectating", mode !is ViewModePlaying)
+        put("replay", mode is ViewModeSoloReplay || mode is ViewModeSharedReplay)
+        put("sharedReplay", mode is ViewModeSharedReplay)
+        if (mode is ViewModeSharedReplay) put("sharedReplayLeader", mode.sharedReplay.owner.username)
+        put("databaseID", when (mode) {
+            is ViewModeSoloReplay -> mode.gameId ?: 0
+            is ViewModeSharedReplay -> mode.gameId ?: 0
+            else -> 0
+        })
+        put("options", legacyOptions(i.options))
+        put("characterAssignments", JsonArray(i.characters.map { c ->
+            JsonPrimitive(when (c) {
+                is CharacterAssignmentPlain -> c.characterId
+                is CharacterAssignmentColor -> c.characterId
+                is CharacterAssignmentRank -> c.characterId
+            })
+        }))
+        put("characterMetadata", JsonArray(i.characters.map { c ->
+            JsonPrimitive(when (c) {
+                is CharacterAssignmentPlain -> -1
+                is CharacterAssignmentColor -> c.color
+                is CharacterAssignmentRank -> c.rank
+            })
         }))
     }
 
-    private fun legacyOptions(o: JsonObject?): JsonObject = buildJsonObject {
-        put("variantName", o?.str("variantName") ?: "No Variant")
-        put("timed", o?.get("timeControl") != null)
-        put("speedrun", o?.bool("speedrun") ?: false)
-        put("cardCycle", false)
-        put("deckPlays", o?.bool("deckPlays") ?: false)
-        put("emptyClues", o?.bool("emptyClues") ?: false)
-        put("oneExtraCard", o?.bool("oneExtraCard") ?: false)
-        put("oneLessCard", o?.bool("oneLessCard") ?: false)
-        put("allOrNothing", o?.bool("allOrNothing") ?: false)
-        put("detrimentalCharacters", o?.bool("detrimentalCharacters") ?: false)
+    /** What a game's state is, as the old server sent it in pieces: the actions, then the notes and, in a replay, every card. */
+    private fun gameState(s: GameState): List<ServerMessage> {
+        val tableId = s.tableId.toInt()
+        val actions = s.events.mapNotNull(::event)
+        val out = mutableListOf(ServerMessage("gameActionList", buildJsonObject {
+            put("tableID", tableId)
+            put("list", JsonArray(actions))
+        }))
+        s.deck?.let { out += cardIdentities(s.tableId, it) }
+        out += ServerMessage("noteList", noteList(s.tableId, s.notes))
+        s.votes?.let { v ->
+            voted = v.voted
+            out += ServerMessage("voteChange", buildJsonObject { put("vote", v.voted) })
+        }
+        return out
     }
 
-    private fun chat(c: JsonObject): JsonObject = buildJsonObject {
-        put("msg", c.str("text") ?: "")
-        c.str("username")?.let { put("who", it) }
-        put("source", c.str("source") ?: "user")
-        put("datetime", c.str("sentAt") ?: "")
-        c.int("chatId")?.let { put("chatID", it) }
-        c.str("recipient")?.let { put("recipient", it) }
-        put("room", c.int("tableId")?.let { "table$it" } ?: "lobby")
-    }
+    private fun cardIdentities(tableId: TableId, deck: List<CardIdentity>) = ServerMessage("cardIdentities", buildJsonObject {
+        put("tableID", tableId.toInt())
+        put("cardIdentities", JsonArray(deck.map { id -> buildJsonObject { put("suitIndex", id.suitIndex); put("rank", id.rank) } }))
+    })
 
-    private fun init(i: JsonObject): JsonObject = buildJsonObject {
-        val mode = i.str("mode")
-        val options = i["options"] as? JsonObject
-        val shared = i["sharedReplay"] as? JsonObject
-        timed = options?.get("timeControl") != null
-        turn = 0
-        put("tableID", i.int("tableId") ?: 0)
-        put("playerNames", JsonArray(i.arr("playerNames")))
-        put("ourPlayerIndex", i.int("ourPlayerIndex") ?: 0)
-        put("spectating", mode != "playing")
-        put("replay", mode == "replay" || mode == "sharedReplay")
-        put("sharedReplay", mode == "sharedReplay")
-        shared?.str("leader")?.let { put("sharedReplayLeader", it) }
-        put("databaseID", i.int("gameId") ?: 0)
-        put("options", legacyOptions(options))
-        val characters = i.arr("characters")
-        put("characterAssignments", JsonArray(characters.map { JsonPrimitive((it as? JsonObject)?.int("characterId") ?: -1) }))
-        put("characterMetadata", JsonArray(characters.map { JsonPrimitive((it as? JsonObject)?.int("metadata") ?: -1) }))
+    private fun noteList(tableId: TableId, notes: List<AuthorNotes>): JsonObject = buildJsonObject {
+        put("tableID", tableId.toInt())
+        put("notes", JsonArray(notes.map { n ->
+            buildJsonObject {
+                put("name", n.username)
+                put("notes", JsonArray(n.notes.map { JsonPrimitive(it) }))
+                put("isSpectator", n.spectator)
+            }
+        }))
     }
 
     /** One game event as the old server's game action; null when it has no use here (a clue whose content is hidden). */
-    private fun event(e: JsonObject): JsonObject? {
-        val identity = e["identity"] as? JsonObject
-        fun card(type: String) = buildJsonObject {
+    private fun event(e: GameEvent): JsonObject? {
+        fun card(type: String, player: Int, order: Int, id: CardIdentity?, failed: Boolean? = null) = buildJsonObject {
             put("type", type)
-            put("playerIndex", e.int("playerIndex") ?: -1)
-            put("order", e.int("order") ?: -1)
-            put("suitIndex", identity?.int("suitIndex") ?: -1)
-            put("rank", identity?.int("rank") ?: -1)
+            put("playerIndex", player)
+            put("order", order)
+            put("suitIndex", id?.suitIndex ?: -1)
+            put("rank", id?.rank ?: -1)
+            failed?.let { put("failed", it) }
         }
-        return when (val type = e.str("type")) {
-            "draw", "play", "cardIdentity" -> card(type)
-            "discard" -> JsonObject(card(type) + ("failed" to JsonPrimitive(e.bool("failed"))))
-            "clue" -> {
-                val clue = e["clue"] as? JsonObject ?: return null
+        return when (e) {
+            is GameEventDraw -> card("draw", e.playerIndex, e.order, e.identity)
+            is GameEventPlay -> card("play", e.playerIndex, e.order, e.identity)
+            is GameEventCardIdentity -> card("cardIdentity", e.playerIndex, e.order, e.identity)
+            is GameEventDiscard -> card("discard", e.playerIndex, e.order, e.identity, failed = false)
+            // A misplay is a failed discard in the old form, and the app counts the strike from it.
+            is GameEventMisplay -> card("discard", e.playerIndex, e.order, e.identity, failed = true)
+            is GameEventClue -> {
+                val clue = e.clue ?: return null
                 buildJsonObject {
                     put("type", "clue")
                     put("clue", buildJsonObject {
-                        put("type", if (clue.str("type") == "color") 0 else 1)
-                        put("value", clue.int("value") ?: 0)
+                        when (clue) {
+                            is ClueColor -> { put("type", 0); put("value", clue.color) }
+                            is ClueRankVariant -> { put("type", 1); put("value", clue.rank) }
+                        }
                     })
-                    put("giver", e.int("giver") ?: -1)
-                    put("list", JsonArray(e.arr("orders")))
-                    put("target", e.int("target") ?: -1)
+                    put("giver", e.playerIndex)
+                    put("list", JsonArray(e.orders.map { JsonPrimitive(it) }))
+                    put("target", e.receiverIndex)
                     put("turn", turn)
                 }
             }
-            "turn" -> {
-                turn = e.int("turn") ?: turn
+            is GameEventTurn -> {
+                turn = e.turn
                 buildJsonObject {
                     put("type", "turn")
-                    put("num", turn)
-                    put("currentPlayerIndex", e.int("currentPlayerIndex") ?: -1)
+                    put("num", e.turn)
+                    put("currentPlayerIndex", e.currentPlayerIndex ?: -1)
                 }
             }
-            "gameOver" -> buildJsonObject {
+            is GameEventGameOver -> buildJsonObject {
                 put("type", "gameOver")
-                put("endCondition", endCondition(e.str("endCondition")))
-                put("playerIndex", e.int("playerIndex") ?: -1)
-                put("votes", JsonArray(e.arr("votes")))
+                put("endCondition", endCondition(e.endCondition))
+                put("playerIndex", e.playerIndex ?: -1)
+                put("votes", JsonArray(e.voters.map { JsonPrimitive(it) }))
             }
-            "playerTimes" -> buildJsonObject {
+            is GameEventPlayerTimes -> buildJsonObject {
                 put("type", "playerTimes")
-                // Untimed: the new server counts the time taken up; the app reads minus the time taken.
-                put("playerTimes", JsonArray(e.arr("playerTimesMs").map { t ->
-                    val ms = (t as? JsonPrimitive)?.longOrNull ?: 0L
-                    JsonPrimitive(if (timed) ms else -ms)
-                }))
-                put("duration", (e["durationMs"] as? JsonPrimitive)?.longOrNull ?: 0L)
+                // Untimed: the server counts the time taken up; the app reads minus the time taken.
+                put("playerTimes", JsonArray(e.playerTimesMs.map { JsonPrimitive(if (timed) it else -it) }))
+                put("duration", e.durationMs)
             }
-            else -> null
         }
     }
 
-    // ------------------------------------------------------------------ outbound pieces
+    // ------------------------------------------------------------------ commands of the app
 
-    private fun settings(d: JsonObject): JsonObject = buildJsonObject {
-        put("name", d.str("name") ?: "Table")
-        put("maxPlayers", d.int("maxPlayers") ?: 5)
+    private fun settings(d: JsonObject): TableSettings {
         val o = d["options"] as? JsonObject
-        put("options", buildJsonObject {
-            put("variantName", o?.str("variantName") ?: "No Variant")
-            put("speedrun", o?.bool("speedrun") ?: false)
-            put("deckPlays", o?.bool("deckPlays") ?: false)
-            put("emptyClues", o?.bool("emptyClues") ?: false)
-            put("oneExtraCard", o?.bool("oneExtraCard") ?: false)
-            put("oneLessCard", o?.bool("oneLessCard") ?: false)
-            put("allOrNothing", o?.bool("allOrNothing") ?: false)
-            put("detrimentalCharacters", o?.bool("detrimentalCharacters") ?: false)
-        })
+        return TableSettings(
+            maxPlayers = d.int("maxPlayers") ?: ProtocolConstants.DEFAULT_MAX_PLAYERS,
+            name = d.str("name") ?: "Table",
+            options = GameOptions(
+                variantId = variantId(o?.str("variantName") ?: ProtocolConstants.DEFAULT_VARIANT_NAME),
+                speedrun = o?.bool("speedrun") ?: false,
+                deckPlays = o?.bool("deckPlays") ?: false,
+                emptyClues = o?.bool("emptyClues") ?: false,
+                oneExtraCard = o?.bool("oneExtraCard") ?: false,
+                oneLessCard = o?.bool("oneLessCard") ?: false,
+                allOrNothing = o?.bool("allOrNothing") ?: false,
+                detrimentalCharacters = o?.bool("detrimentalCharacters") ?: false,
+            ),
+        )
     }
 
     /** The old action (`type` 0 play, 1 discard, 2 colour clue, 3 rank clue; `target` a card or a player). */
-    private fun playerAction(d: JsonObject): JsonObject = buildJsonObject {
+    private fun playerAction(d: JsonObject): PlayerAction {
         val target = d.int("target") ?: 0
         val value = d.int("value") ?: 0
-        when (d.int("type")) {
-            0 -> { put("type", "play"); put("order", target) }
-            1 -> { put("type", "discard"); put("order", target) }
-            2 -> { put("type", "clue"); put("target", target); put("clue", buildJsonObject { put("type", "color"); put("value", value) }) }
-            else -> { put("type", "clue"); put("target", target); put("clue", buildJsonObject { put("type", "rank"); put("value", value) }) }
+        return when (d.int("type")) {
+            0 -> PlayerActionPlay(target)
+            1 -> PlayerActionDiscard(target)
+            2 -> PlayerActionClue(clue = ClueColor(value), receiverIndex = target)
+            else -> PlayerActionClue(clue = ClueRankVariant(value), receiverIndex = target)
         }
     }
 
     companion object {
+        /** The old server's numbers for how a game ended. */
+        fun endCondition(c: EndCondition): Int = when (c) {
+            EndCondition.Normal -> 1
+            EndCondition.Strikeout -> 2
+            EndCondition.Timeout -> 3
+            EndCondition.TerminatedByPlayer -> 4
+            EndCondition.SpeedrunFail -> 5
+            EndCondition.IdleTimeout -> 6
+            EndCondition.CharacterSoftlock -> 7
+            EndCondition.AllOrNothingFail -> 8
+            EndCondition.AllOrNothingSoftlock -> 9
+            EndCondition.TerminatedByVote -> 10
+        }
+
         /**
-         * The website's export of a finished game (`/export/<id>`) now names its moves (`play`, `discard`, `clue` with a
-         * named type); the analysis reads the old one (`players`, and moves with `type` 0 to 3 and a `target` and `value`).
+         * The website's export of a finished game (`/export/<id>`, a [ReplayGame]) as the analysis reads it: `players`, the
+         * deck, and the moves as `type` 0 to 3 with a `target` and a `value`.
          */
         fun legacyExport(text: String): String {
-            val game = runCatching { HanabJson.parseToJsonElement(text) as? JsonObject }.getOrNull() ?: return text
-            val moves = (game["actions"] as? JsonArray)?.mapNotNull { a ->
-                val m = a as? JsonObject ?: return@mapNotNull null
-                when (m.str("type")) {
-                    "play" -> buildJsonObject { put("type", 0); put("target", m.int("order") ?: 0); put("value", 0) }
-                    "discard" -> buildJsonObject { put("type", 1); put("target", m.int("order") ?: 0); put("value", 0) }
-                    "clue" -> {
-                        val clue = m["clue"] as? JsonObject ?: return@mapNotNull null
-                        buildJsonObject {
-                            put("type", if (clue.str("type") == "color") 2 else 3)
-                            put("target", m.int("target") ?: 0)
-                            put("value", clue.int("value") ?: 0)
+            val game = ProtocolJson.decodeFromString(ReplayGame.serializer(), text)
+            val moves = game.actions.orEmpty().mapNotNull { a ->
+                when (a) {
+                    is ReplayGameActionPlay -> buildJsonObject { put("type", 0); put("target", a.order); put("value", 0) }
+                    is ReplayGameActionDiscard -> buildJsonObject { put("type", 1); put("target", a.order); put("value", 0) }
+                    is ReplayGameActionClue -> buildJsonObject {
+                        when (val c = a.clue) {
+                            is ClueColor -> { put("type", 2); put("value", c.color) }
+                            is ClueRankVariant -> { put("type", 3); put("value", c.rank) }
                         }
+                        put("target", a.receiverIndex)
                     }
-                    else -> null
+                    is ReplayGameActionGameOver -> null
                 }
-            } ?: return text
-            return JsonObject(game - "playerNames" + mapOf(
-                "players" to (game["playerNames"] ?: game["players"] ?: JsonArray(emptyList())),
-                "actions" to JsonArray(moves),
-            )).toString()
+            }
+            return buildJsonObject {
+                put("players", JsonArray(game.playerNames.orEmpty().map { JsonPrimitive(it) }))
+                put("deck", JsonArray(game.deck.orEmpty().map { id -> buildJsonObject { put("suitIndex", id.suitIndex); put("rank", id.rank) } }))
+                put("actions", JsonArray(moves))
+                game.seed?.let { put("seed", it) }
+            }.toString()
         }
 
-        /** The old server's numbers for how a game ended. */
-        fun endCondition(name: String?): Int = when (name) {
-            "normal" -> 1
-            "strikeout" -> 2
-            "timeout" -> 3
-            "terminatedByPlayer" -> 4
-            "speedrunFail" -> 5
-            "idleTimeout" -> 6
-            "characterSoftlock" -> 7
-            "allOrNothingFail" -> 8
-            "allOrNothingSoftlock" -> 9
-            "terminatedByVote" -> 10
-            else -> 0
-        }
-
-        private fun JsonObject.int(k: String) = (this[k] as? JsonPrimitive)?.intOrNull
-        private fun JsonObject.str(k: String) = (this[k] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.contentOrNull
-        private fun JsonObject.bool(k: String) = (this[k] as? JsonPrimitive)?.booleanOrNull ?: false
-        private fun JsonObject.arr(k: String): List<JsonElement> = (this[k] as? JsonArray) ?: emptyList()
-        private fun withTableID(o: JsonObject) = buildJsonObject { put("tableID", o.int("tableId") ?: 0) }
+        private fun JsonObject.int(k: String) = (this[k] as? JsonPrimitive)?.content?.toIntOrNull()
+        private fun JsonObject.str(k: String) = (this[k] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content
+        private fun JsonObject.bool(k: String) = (this[k] as? JsonPrimitive)?.content == "true"
     }
 }

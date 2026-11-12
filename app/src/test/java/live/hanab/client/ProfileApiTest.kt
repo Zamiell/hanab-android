@@ -2,6 +2,8 @@ package live.hanab.client
 
 import live.hanab.client.net.HanabJson
 import live.hanab.client.net.HistoryRow
+import live.hanab.client.protocol.GamePage
+import live.hanab.client.protocol.ProtocolJson
 import live.hanab.client.net.parseScores
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -92,12 +94,15 @@ class ProfileApiTest {
         assertNull(parseScores("<html>Error</html>"))
     }
 
-    @Test fun readsAHistoryRowAsTheSiteSendsIt() {
-        val json = """{"gameId":2063346,"numPlayers":2,"score":25,"variantId":2197,"numGamesOnSeed":8,"playerNames":["RandP","WillFlame"],"finishedAt":"2026-10-25T01:44:52.123Z","seed":"p2v2197s7"}"""
-        val row = HanabJson.decodeFromString<HistoryRow>(json)
+    @Test fun readsAHistoryPageAsTheSiteSendsIt() {
+        val json = """{"games":[{"gameId":2063346,"options":{"variantId":2197,"speedrun":false,"deckPlays":false,"emptyClues":false,"oneExtraCard":false,"oneLessCard":false,"allOrNothing":false,"detrimentalCharacters":false},"seed":"p2v2197s7","score":25,"numTurns":40,"endCondition":"normal","startedAt":"2026-10-25T01:30:00.000Z","finishedAt":"2026-10-25T01:44:52.123Z","numGamesOnSeed":8,"playerNames":["RandP","WillFlame"],"tags":[]}],"offset":0,"total":7298}"""
+        val page = ProtocolJson.decodeFromString(GamePage.serializer(), json)
+        assertEquals(7298L, page.total)
+        val row = HistoryRow.of(page.games.single())
         assertEquals(2063346, row.id)
         assertEquals(2197, row.variant)
         assertEquals(2, row.numPlayers)
+        assertEquals(25, row.score)
         assertEquals("2026-10-25", row.date)
         assertEquals(listOf("RandP"), row.others("WillFlame"))
     }

@@ -7,18 +7,20 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import live.hanab.client.protocol.GameHistoryEntry
+import live.hanab.client.protocol.GamePage
+import live.hanab.client.protocol.ProtocolJson
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
 
-/** One finished game in a player's history, as the site's `/api/v1/history/<name>` lists it. */
-@Serializable
+/** One finished game in a player's history, as the site's `/api/v1/history/<name>` lists it (a [GameHistoryEntry]). */
 data class HistoryRow(
-    @SerialName("gameId") val id: Int = 0,
+    val id: Int = 0,
     val numPlayers: Int = 0,
     val score: Int = 0,
     /** The site's variant id; see [ProfileApi.variantNames]. */
-    @SerialName("variantId") val variant: Int = 0,
+    val variant: Int = 0,
     /** Everyone at the table. */
     val playerNames: List<String> = emptyList(),
     /** Like "2026-10-25T01:44:52.123Z". */
@@ -26,13 +28,11 @@ data class HistoryRow(
 ) {
     val date: String get() = finishedAt.substringBefore("T")
     fun others(me: String): List<String> = playerNames.filter { it.isNotBlank() && !it.equals(me, ignoreCase = true) }
-}
 
-@Serializable
-private data class HistoryDto(
-    val totalRows: Int = 0,
-    val rows: List<HistoryRow>? = null,
-)
+    companion object {
+        fun of(g: GameHistoryEntry) = HistoryRow(g.gameId, g.playerNames.size, g.score, g.options.variantId, g.playerNames, g.finishedAt)
+    }
+}
 
 data class HistoryPage(val total: Int, val rows: List<HistoryRow>)
 
@@ -108,15 +108,15 @@ object ProfileApi {
         withContext(Dispatchers.IO) {
             val url = "https://$BASE_HOST/api/v1/history".toHttpUrl().newBuilder()
                 .addPathSegment(name)
-                .addQueryParameter("page", page.toString())
-                .addQueryParameter("size", HISTORY_PAGE_SIZE.toString())
+                .addQueryParameter("offset", (page * HISTORY_PAGE_SIZE).toString())
+                .addQueryParameter("limit", HISTORY_PAGE_SIZE.toString())
                 .apply {
-                    if (players != null) addQueryParameter("fcol[numPlayers]", players.toString())
-                    if (variantId != null) addQueryParameter("fcol[variant]", variantId.toString())
+                    if (players != null) addQueryParameter("filter[numPlayers]", players.toString())
+                    if (variantId != null) addQueryParameter("filter[variantId]", variantId.toString())
                 }
                 .build()
-            val dto = HanabJson.decodeFromString<HistoryDto>(get(url.toString()))
-            HistoryPage(dto.totalRows, dto.rows.orEmpty())
+            val page = ProtocolJson.decodeFromString(GamePage.serializer(), get(url.toString()))
+            HistoryPage(page.total.toInt(), page.games.map(HistoryRow::of))
         }
 }
 

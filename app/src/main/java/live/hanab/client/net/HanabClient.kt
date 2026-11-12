@@ -11,7 +11,9 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import okhttp3.Cookie
@@ -24,6 +26,10 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import live.hanab.client.NativeOffline
+import live.hanab.client.protocol.decodeInbound
+import live.hanab.client.protocol.decodeReply
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.TimeUnit
 
 const val BASE_HOST = "hanab.live"
@@ -59,6 +65,17 @@ class HanabClient {
 
     private var socket: WebSocket? = null
 
+    private val nextRequestId = AtomicLong(1)
+
+    /** The requests the server has not answered yet, by id: what they asked, to read the reply. */
+    private val pending = ConcurrentHashMap<Long, String>()
+
+    private fun onReply(reply: WireFrame.Reply) {
+        val command = pending.remove(reply.id) ?: return
+        reply.error?.let { _messages.tryEmit(ServerMessage("error", buildJsonObject { put("error", WireFrames.errorText(it)) })); return }
+        decodeReply(command, reply.data)?.let { adapter.reply(it).forEach { m -> _messages.tryEmit(m) } }
+    }
+
     /** Turns the server's messages into the ones the app reads, and the app's commands into the server's. */
     private var adapter = WireAdapter()
 
@@ -71,31 +88,14 @@ class HanabClient {
     private val _errors = MutableSharedFlow<String>(extraBufferCapacity = 16)
     val errors: SharedFlow<String> = _errors
 
-    /** The website's current version, which the server wants on the login and on the WebSocket (see [siteVersion]). */
-    @Volatile private var version = ""
-
-    /**
-     * The version of the website's client code that is live now: the hash in the name of its script. The server turns
-     * away any client that does not name it (a client that says it is a bot is exempt, but then the account is marked
-     * as a bot for good, which this app, played by people, must not do).
-     */
-    private fun siteVersion(): String? {
-        val html = http.newCall(Request.Builder().url("https://$BASE_HOST/").build()).execute().use { it.body?.string().orEmpty() }
-        return parseSiteVersion(html)
-    }
-
     /** Returns null on success, otherwise a human-readable error. */
     suspend fun login(username: String, password: String): String? = withContext(Dispatchers.IO) {
-        val current = try {
-            siteVersion()
-        } catch (e: Exception) {
-            return@withContext "Network error: ${e.message}"
-        } ?: return@withContext "Could not read the website's version, so the server would refuse this app."
-        version = current
         val body = FormBody.Builder()
             .add("username", username)
             .add("password", password)
-            .add("version", current)
+            // An app for people: its account stays a normal one, and the website's version is not needed (the server's
+            // "client" is web, bot or app).
+            .add("client", "app")
             .build()
         val req = Request.Builder().url("https://$BASE_HOST/login").post(body).build()
         try {
@@ -119,9 +119,10 @@ class HanabClient {
         if (_state.value != ConnState.Disconnected) return
         _state.value = ConnState.Connecting
         adapter = WireAdapter()
+        pending.clear()
         val req = Request.Builder()
-            // The WebSocket checks the client version too (since Hanabi-Live/hanabi-live#3254), as the login does.
-            .url("https://$BASE_HOST/ws?version=$version")
+            // The WebSocket says what kind of client this is, as the login does.
+            .url("https://$BASE_HOST/ws?client=app")
             .header("Origin", "https://$BASE_HOST")
             .build()
         socket = http.newWebSocket(req, object : WebSocketListener() {
@@ -130,7 +131,11 @@ class HanabClient {
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                unpack(text)?.let { m -> adapter.inbound(m).forEach { _messages.tryEmit(it) } }
+                when (val frame = WireFrames.parse(text)) {
+                    is WireFrame.Event -> adapter.inbound(decodeInbound(frame.name, frame.data)).forEach { _messages.tryEmit(it) }
+                    is WireFrame.Reply -> onReply(frame)
+                    null -> {}
+                }
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
@@ -149,8 +154,11 @@ class HanabClient {
             NativeOffline.send(offlineHandle, command, data?.toString() ?: "{}")
             return
         }
-        adapter.outbound(command, data).forEach { (c, d) ->
-            socket?.send(pack(c, d))
+        adapter.outbound(command, data ?: JsonObject(emptyMap())).forEach { out ->
+            val (c, d) = out.encode()
+            val id = nextRequestId.getAndIncrement()
+            pending[id] = c
+            socket?.send(WireFrames.request(id, c, d))
         }
     }
 
@@ -208,8 +216,3 @@ class HanabClient {
         _state.value = ConnState.Disconnected
     }
 }
-
-private val SITE_SCRIPT = Regex("""/public/js/bundles/main\.([0-9a-f]+)\.min\.js""")
-
-/** The website's client version in its home page: the hash in the name of the main script; null if there is none. */
-fun parseSiteVersion(html: String): String? = SITE_SCRIPT.find(html)?.groupValues?.get(1)
