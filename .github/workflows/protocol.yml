@@ -2,14 +2,14 @@
 # This keeps them honest:
 #   generated  Protocol.kt is what the generator writes for the pinned commit (nobody edited it, the pin and the file moved together)
 #   deployed   the website that is live still has the pinned protocol; when it does not, this run fails and lists what changed
-#              (then: scripts/protocol.ps1 bump, fix what the build and the unit tests show, commit)
+#              (then: scripts/protocol.sh bump, fix what the build and the unit tests show, commit)
 name: protocol
 
 on:
   push:
-    paths: ['native/protocol/**', 'app/src/main/java/live/hanab/client/protocol/**', 'scripts/protocol.ps1', '.github/workflows/protocol.yml']
+    paths: ['native/protocol/**', 'app/src/main/java/live/hanab/client/protocol/**', 'scripts/protocol.ps1', 'scripts/protocol.sh', '.github/workflows/protocol.yml']
   pull_request:
-    paths: ['native/protocol/**', 'app/src/main/java/live/hanab/client/protocol/**', 'scripts/protocol.ps1', '.github/workflows/protocol.yml']
+    paths: ['native/protocol/**', 'app/src/main/java/live/hanab/client/protocol/**', 'scripts/protocol.ps1', 'scripts/protocol.sh', '.github/workflows/protocol.yml']
   schedule:
     - cron: '17 6 * * *'
   workflow_dispatch:
@@ -20,8 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Protocol.kt matches the pinned commit
-        shell: pwsh
-        run: ./scripts/protocol.ps1 check
+        run: ./scripts/protocol.sh check
 
   deployed:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -29,7 +28,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: The live website has the pinned protocol
-        shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: ./scripts/protocol.ps1 outdated
+        run: ./scripts/protocol.sh outdated

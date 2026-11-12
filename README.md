@@ -132,7 +132,7 @@ reimplemented from the website's shared game code, driven by the server's stream
 | `net/` | HTTP login, WebSocket client, message models |
 | `net/WireAdapter.kt` | The website's typed messages to the shapes the app reads, and the app's commands to typed ones |
 | `protocol/Protocol.kt` | Generated: the website's wire protocol as Kotlin types (see "Keeping up with the website's protocol") |
-| `native/protocol` | The generator, and `scripts/protocol.ps1` to run it, bump the pin and check for drift |
+| `native/protocol` | The generator, and `scripts/protocol.ps1` / `protocol.sh` to run it, bump the pin and check for drift |
 | `game/GameState.kt` | Immutable game state, clue rules, deduction, replay of earlier turns |
 | `game/Variants.kt` | Suits and variants, read from the bundled `suits.json` / `variants.json` |
 | `LobbyViewModel.kt` | Connection, lobby, game and bot state |
@@ -163,11 +163,19 @@ commit are in `app/src/test/resources/protocol` and `ProtocolFixturesTest` runs 
 .\scripts\protocol.ps1 outdated   # has the website that is live changed its protocol since the pin? what changed?
 .\scripts\protocol.ps1 bump       # pin the commit the website is running now, refresh the test cases, regenerate
 .\scripts\protocol.ps1 gen        # regenerate Protocol.kt from the pin
-.\scripts\protocol.ps1 check      # fail if Protocol.kt is not what gen writes (used by CI)
+.\scripts\protocol.ps1 check      # fail if Protocol.kt is not what gen writes
+```
+
+```bash
+./scripts/protocol.sh outdated      # the same on macOS / Linux (needs cargo, curl and git); CI runs these
+./scripts/protocol.sh bump
+./scripts/protocol.sh gen
+./scripts/protocol.sh check
 ```
 
 After a bump, `.uild.ps1 testDebugUnitTest` shows what changed: a message the website added or renamed fails the build in
-`WireAdapter.inbound` (which names every message with no catch-all), and a changed field fails where it is read. A GitHub
+`WireAdapter.inbound` (which names every message with no catch-all), and a changed field fails where it is read. `Protocol.kt` is generated but checked in (like the website's own generated TypeScript), so ordinary builds need no Rust and
+no network; `check` fails if it drifts from the pin. A GitHub
 Actions job (`.github/workflows/protocol.yml`) checks the generated file on every change and, daily, whether the live website
 still has the pinned protocol. It needs cargo (rustup fetches the pinned toolchain); ordinary builds do not.
 
