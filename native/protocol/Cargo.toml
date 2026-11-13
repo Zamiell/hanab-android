@@ -6,6 +6,6 @@ publish = false
 
 [dependencies]
 # The website's wire contracts, pinned to a commit: `scripts/protocol.ps1 bump` moves it.
-hanabi_protocol = { git = "https://github.com/Hanabi-Live/hanabi-live", rev = "e57555cdd2b42733a568d68c3ef5c6a3d80fba21" }
+hanabi_protocol = { git = "https://github.com/Hanabi-Live/hanabi-live", rev = "5fd7dd21e85211bd262d5158a8675873a14f08b6" }
 serde_json = "1"
 anyhow = "1"
