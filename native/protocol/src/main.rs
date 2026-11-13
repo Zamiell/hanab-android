@@ -462,8 +462,8 @@ fn main() -> Result<()> {
     }
 
     // The commands: which payload each message carries.
-    let client = hanabi_protocol::client_contracts();
-    let server = hanabi_protocol::server_contracts();
+    let client = hanabi_protocol::request_contracts();
+    let server = hanabi_protocol::event_contracts();
     let mut out = String::new();
     out.push_str("/** A message of the server. */\nsealed interface Inbound\n\n");
     out.push_str("/** A message of the server with a name this version of the protocol does not have. */\nclass InUnknown(val command: String, val data: JsonElement?) : Inbound\n\n");

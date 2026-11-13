@@ -13,7 +13,7 @@ import kotlinx.serialization.json.put
  * The frames around the website's payloads (hanabi-live `packages/data/src/functions/frames.ts`; they are not generated, so
  * `scripts/protocol.ps1 outdated` watches that file too). Each frame is one JSON object:
  *
- *  - a request of ours: `{"id": 1, "type": "tableJoin", "data": {...}}`, with an id that we choose;
+ *  - a request of ours: `{"id": 1, "request": "tableJoin", "data": {...}}`, with an id that we choose;
  *  - the answer to it, once: `{"reply": 1}` with the reply's `data` if it has any, or an `error`;
  *  - a message the server sends on its own: `{"event": "table", "data": {...}}`.
  */
@@ -25,7 +25,7 @@ sealed interface WireFrame {
 object WireFrames {
     fun request(id: Long, command: String, data: JsonElement): String = buildJsonObject {
         put("id", id)
-        put("type", command)
+        put("request", command)
         put("data", data)
     }.toString()
 

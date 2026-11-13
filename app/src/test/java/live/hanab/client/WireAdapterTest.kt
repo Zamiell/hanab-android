@@ -39,6 +39,10 @@ class WireAdapterTest {
     private fun inbound(command: String, json: String, adapter: WireAdapter = adapter()): List<ServerMessage> =
         adapter.inbound(decodeInbound(command, HanabJson.parseToJsonElement(json)))
 
+    /** A reply does not say which table it is about: the request did. */
+    private fun reply(command: String, json: String, adapter: WireAdapter = adapter(), table: Long = 1L): List<ServerMessage> =
+        adapter.reply(decodeReply(command, HanabJson.parseToJsonElement(json))!!, table)
+
     private fun obj(text: String) = HanabJson.parseToJsonElement(text).jsonObject
 
     private val noVariant = """{"variantId":0,"speedrun":false,"deckPlays":false,"emptyClues":false,"oneExtraCard":false,"oneLessCard":false,"allOrNothing":false,"detrimentalCharacters":false}"""
@@ -119,18 +123,18 @@ class WireAdapterTest {
         assertEquals(listOf("joined", "tableStart"), start.map { it.command })
         assertEquals("false", start[1].data!!.jsonObject["replay"]!!.jsonPrimitive.content)
         assertEquals("true", inbound("tableJoined", """{"tableId":8838,"stage":"replay"}""", adapter)[1].data!!.jsonObject["replay"]!!.jsonPrimitive.content)
-        val init = inbound(
-            "gameInit",
-            """{"characters":[],"customDeal":false,"mode":{"type":"playing","ourPlayerIndex":2},"options":${noVariant.replace("\"variantId\":0", "\"variantId\":1")},"playerNames":["a","b","c"],"startedAt":"2026-11-11T07:09:51.884Z","tableId":8838}""",
-            adapter,
+        val init = reply(
+            "gameInitLoad",
+            """{"characters":[],"customDeal":false,"mode":{"type":"playing","ourPlayerIndex":2},"options":${noVariant.replace("\"variantId\":0", "\"variantId\":1")},"playerNames":["a","b","c"],"startedAt":"2026-11-11T07:09:51.884Z"}""",
+            adapter, 8838L,
         ).single().data!!.jsonObject
         assertEquals("false", init["spectating"]!!.jsonPrimitive.content)
         assertEquals(2, init["ourPlayerIndex"]!!.jsonPrimitive.int)
         assertEquals("6 Suits", init["options"]!!.jsonObject["variantName"]!!.jsonPrimitive.content)
         assertEquals(8838, init["tableID"]!!.jsonPrimitive.int)
 
-        val spectating = inbound(
-            "gameInit",
+        val spectating = reply(
+            "gameInitLoad",
             """{"characters":[],"customDeal":false,"mode":{"type":"spectating"},"options":$noVariant,"playerNames":["a","b"],"startedAt":"2026-11-11T07:09:51.884Z","tableId":1}""",
             adapter,
         ).single().data!!.jsonObject
@@ -139,10 +143,10 @@ class WireAdapterTest {
 
     private fun game(vararg events: String): GameState {
         val adapter = adapter()
-        inbound("gameInit", """{"characters":[],"customDeal":false,"mode":{"type":"playing","ourPlayerIndex":0},"options":$noVariant,"playerNames":["me","bob"],"startedAt":"2026-11-11T07:09:51.884Z","tableId":1}""", adapter)
+        reply("gameInitLoad", """{"characters":[],"customDeal":false,"mode":{"type":"playing","ourPlayerIndex":0},"options":$noVariant,"playerNames":["me","bob"],"startedAt":"2026-11-11T07:09:51.884Z","tableId":1}""", adapter)
         val state = inbound(
             "gameState",
-            """{"events":[${events.joinToString(",")}],"notes":[],"spectators":[],"tableId":1}""",
+            """{"events":[${events.joinToString(",")}],"notes":[],"phase":{"type":"replay","deck":[]},"spectators":[],"tableId":1}""",
             adapter,
         )
         val list = state.first { it.command == "gameActionList" }.data!!.jsonObject["list"]!!.jsonArray.map { it.jsonObject }
@@ -189,6 +193,15 @@ class WireAdapterTest {
         assertEquals(25, g.maxScore)
     }
 
+    /** In Cow & Pig and Duck the server hides what a clue says, but it is still a clue: it costs a token and touches cards. */
+    @Test fun aClueWithItsContentHiddenStillCostsAToken() {
+        val g = game(
+            """{"type":"draw","playerIndex":1,"order":2,"identity":{"suitIndex":0,"rank":1}}""",
+            """{"type":"clue","playerIndex":0,"receiverIndex":1,"orders":[2]}""",
+        )
+        assertEquals(7, g.clues)
+    }
+
     @Test fun theBestReachableScoreFallsWhenEveryCopyIsDiscarded() {
         // All three copies of yellow 1 are discarded: the yellow stack can never start.
         val g = game(*(0..2).flatMap {
@@ -202,7 +215,7 @@ class WireAdapterTest {
 
     @Test fun anUntimedClockCountsUpButTheAppReadsItDown() {
         val adapter = adapter()
-        inbound("gameInit", """{"characters":[],"customDeal":false,"mode":{"type":"playing","ourPlayerIndex":0},"options":$noVariant,"playerNames":["a","b"],"startedAt":"2026-11-11T07:09:51.884Z","tableId":1}""", adapter)
+        reply("gameInitLoad", """{"characters":[],"customDeal":false,"mode":{"type":"playing","ourPlayerIndex":0},"options":$noVariant,"playerNames":["a","b"],"startedAt":"2026-11-11T07:09:51.884Z","tableId":1}""", adapter)
         val times = inbound("gameEvent", """{"tableId":1,"event":{"type":"playerTimes","durationMs":4000,"playerTimesMs":[1500,2500]}}""", adapter).single()
         val action = times.data!!.jsonObject["action"]!!.jsonObject
         assertEquals(listOf("-1500", "-2500"), action["playerTimes"]!!.jsonArray.map { it.jsonPrimitive.content })

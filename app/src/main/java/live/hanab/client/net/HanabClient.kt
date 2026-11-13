@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
@@ -68,12 +69,13 @@ class HanabClient {
     private val nextRequestId = AtomicLong(1)
 
     /** The requests the server has not answered yet, by id: what they asked, to read the reply. */
-    private val pending = ConcurrentHashMap<Long, String>()
+    private val pending = ConcurrentHashMap<Long, Pair<String, JsonElement>>()
 
     private fun onReply(reply: WireFrame.Reply) {
-        val command = pending.remove(reply.id) ?: return
+        val (command, asked) = pending.remove(reply.id) ?: return
         reply.error?.let { _messages.tryEmit(ServerMessage("error", buildJsonObject { put("error", WireFrames.errorText(it)) })); return }
-        decodeReply(command, reply.data)?.let { adapter.reply(it).forEach { m -> _messages.tryEmit(m) } }
+        val table = ((asked as? JsonObject)?.get("tableId") as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull()
+        decodeReply(command, reply.data)?.let { adapter.reply(it, table).forEach { m -> _messages.tryEmit(m) } }
     }
 
     /** Turns the server's messages into the ones the app reads, and the app's commands into the server's. */
@@ -157,7 +159,7 @@ class HanabClient {
         adapter.outbound(command, data ?: JsonObject(emptyMap())).forEach { out ->
             val (c, d) = out.encode()
             val id = nextRequestId.getAndIncrement()
-            pending[id] = c
+            pending[id] = c to d
             socket?.send(WireFrames.request(id, c, d))
         }
     }

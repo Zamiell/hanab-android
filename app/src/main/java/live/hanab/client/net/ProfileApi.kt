@@ -7,14 +7,14 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import live.hanab.client.protocol.GameHistoryEntry
+import live.hanab.client.protocol.GameSummary
 import live.hanab.client.protocol.GamePage
 import live.hanab.client.protocol.ProtocolJson
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
 
-/** One finished game in a player's history, as the site's `/api/v1/history/<name>` lists it (a [GameHistoryEntry]). */
+/** One finished game in a player's history, as the site's `/api/v1/history/<name>` lists it (a [GameSummary]). */
 data class HistoryRow(
     val id: Int = 0,
     val numPlayers: Int = 0,
@@ -30,7 +30,7 @@ data class HistoryRow(
     fun others(me: String): List<String> = playerNames.filter { it.isNotBlank() && !it.equals(me, ignoreCase = true) }
 
     companion object {
-        fun of(g: GameHistoryEntry) = HistoryRow(g.gameId, g.playerNames.size, g.score, g.options.variantId, g.playerNames, g.finishedAt)
+        fun of(g: GameSummary) = HistoryRow(g.gameId, g.playerNames.size, g.score, g.options.variantId, g.playerNames, g.finishedAt)
     }
 }
 

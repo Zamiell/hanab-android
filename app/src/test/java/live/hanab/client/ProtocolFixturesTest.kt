@@ -10,6 +10,8 @@ import live.hanab.client.protocol.InUnknown
 import live.hanab.client.protocol.Inbound
 import live.hanab.client.protocol.Outbound
 import live.hanab.client.protocol.PROTOCOL_REV
+import live.hanab.client.protocol.ReplyInvalid
+import live.hanab.client.protocol.decodeReply
 import live.hanab.client.protocol.ProtocolJson
 import live.hanab.client.protocol.decodeInbound
 import live.hanab.client.protocol.decodeOutbound
@@ -28,19 +30,27 @@ class ProtocolFixturesTest {
         javaClass.getResourceAsStream("/protocol/compatibility.json")!!.bufferedReader().readText(),
     ) as JsonArray
 
-    /** What a message of the client or the server looks like once read and written again (a server message only reads). */
-    private fun roundTrip(direction: String, command: String, input: JsonElement): JsonElement? =
-        if (direction == "client") {
-            val out: Outbound = decodeOutbound(command, input)
-            out.encode().second
-        } else {
+    /**
+     * Reads a message the website's cases call valid, and, for a request (the app's to send), writes it back as the server
+     * normalizes it. The cases name a `direction`: a `request` of the client, an `event` the server sends on its own, or the
+     * `reply` to a request.
+     */
+    private fun roundTrip(direction: String, command: String, input: JsonElement): JsonElement? = when (direction) {
+        "request" -> decodeOutbound(command, input).encode().second
+        "event" -> {
             val message: Inbound = decodeInbound(command, input)
             if (message is InUnknown || message is InInvalid) {
-                val why = (message as? InInvalid)?.error ?: "no such command"
-                throw AssertionError("the server's message $command does not read: $why")
+                val why = (message as? InInvalid)?.error ?: "no such event"
+                throw AssertionError("the server's event $command does not read: $why")
             }
             null
         }
+        else -> {
+            val reply = decodeReply(command, input) ?: throw AssertionError("the request $command has no reply with data")
+            if (reply is ReplyInvalid) throw AssertionError("the reply to $command does not read: ${reply.error}")
+            null
+        }
+    }
 
     @Test fun everyMessageTheServerAcceptsReads() {
         val failures = mutableListOf<String>()
