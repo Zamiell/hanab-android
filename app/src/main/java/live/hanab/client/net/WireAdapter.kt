@@ -66,7 +66,6 @@ class WireAdapter(
         is InTableBooted -> one("boot", tableRef(m.data))
         is InChat -> chat(m.data)?.let { one("chat", it) }.orEmpty()
         is InChatList -> one("chatList", buildJsonObject { put("list", JsonArray(m.data.messages.mapNotNull(::chat))) })
-        is InGameInit -> one("init", init(m.data))
         is InGameState -> gameState(m.data)
         is InGameEvent -> event(m.data.event)?.let {
             one("gameAction", buildJsonObject { put("tableID", m.data.tableId.toInt()); put("action", it) })
@@ -109,12 +108,17 @@ class WireAdapter(
         is InSpectators, is InTableOwner, is InTableRestartDecliners, is InTableSuggestion -> emptyList()
     }
 
-    /** The old-style messages for the reply of the server to a request that has data. */
-    fun reply(r: Reply): List<ServerMessage> = when (r) {
+    /**
+     * The old-style messages for the reply of the server to a request that has data. A reply does not name the table it is
+     * about (the request did), so the caller says which table the request was for.
+     */
+    fun reply(r: Reply, tableId: Long? = null): List<ServerMessage> = when (r) {
         is ReplyChatPmHistory -> one("chatPMHistory", buildJsonObject {
             put("list", JsonArray(r.data.messages.mapNotNull(::chat)))
             put("hasMore", false)
         })
+        // A game's setup is the answer to the request to load it now (it was a message of its own).
+        is ReplyGameInitLoad -> one("init", init(r.data, tableId ?: 0L))
         is ReplyInvalid -> unreadable(r.command, r.error)
         // The app asks for neither of these.
         is ReplyGameHistory, is ReplySeedGames -> emptyList()
@@ -268,11 +272,11 @@ class WireAdapter(
         }
     }
 
-    private fun init(i: GameInit): JsonObject = buildJsonObject {
+    private fun init(i: GameInit, tableId: TableId): JsonObject = buildJsonObject {
         timed = i.options.timeControl != null
         turn = 0
         val mode = i.mode
-        put("tableID", i.tableId.toInt())
+        put("tableID", tableId.toInt())
         put("playerNames", JsonArray(i.playerNames.map { JsonPrimitive(it) }))
         put("ourPlayerIndex", when (mode) {
             is ViewModePlaying -> mode.ourPlayerIndex
@@ -315,12 +319,14 @@ class WireAdapter(
             put("tableID", tableId)
             put("list", JsonArray(actions))
         }))
-        s.deck?.let { out += cardIdentities(s.tableId, it) }
-        out += ServerMessage("noteList", noteList(s.tableId, s.notes))
-        s.votes?.let { v ->
-            voted = v.voted
-            out += ServerMessage("voteChange", buildJsonObject { put("vote", v.voted) })
+        when (val phase = s.phase) {
+            is GamePhaseReplay -> out += cardIdentities(s.tableId, phase.deck)
+            is GamePhasePlaying -> phase.votes?.let { v ->
+                voted = v.voted
+                out += ServerMessage("voteChange", buildJsonObject { put("vote", v.voted) })
+            }
         }
+        out += ServerMessage("noteList", noteList(s.tableId, s.notes))
         return out
     }
 
@@ -340,7 +346,7 @@ class WireAdapter(
         }))
     }
 
-    /** One game event as the old server's game action; null when it has no use here (a clue whose content is hidden). */
+    /** One game event as the old server's game action. */
     private fun event(e: GameEvent): JsonObject? {
         fun card(type: String, player: Int, order: Int, id: CardIdentity?, failed: Boolean? = null) = buildJsonObject {
             put("type", type)
@@ -358,13 +364,16 @@ class WireAdapter(
             // A misplay is a failed discard in the old form, and the app counts the strike from it.
             is GameEventMisplay -> card("discard", e.playerIndex, e.order, e.identity, failed = true)
             is GameEventClue -> {
-                val clue = e.clue ?: return null
+                val clue = e.clue
                 buildJsonObject {
                     put("type", "clue")
                     put("clue", buildJsonObject {
+                        // The server hides what a Cow & Pig or Duck clue says; those variants ignore it (they only
+                        // say aloud that a clue was given), but the clue still costs a token and touches cards.
                         when (clue) {
-                            is ClueColor -> { put("type", 0); put("value", clue.color) }
-                            is ClueRankVariant -> { put("type", 1); put("value", clue.rank) }
+                            is VisibleClueColor -> { put("type", 0); put("value", clue.color ?: 0) }
+                            is VisibleClueRank -> { put("type", 1); put("value", clue.rank ?: 0) }
+                            null -> { put("type", 1); put("value", 0) }
                         }
                     })
                     put("giver", e.playerIndex)

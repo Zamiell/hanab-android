@@ -16,7 +16,7 @@ class WireFramesTest {
     @Test fun aRequestCarriesItsId() {
         val frame = HanabJson.parseToJsonElement(WireFrames.request(7, "tableJoin", HanabJson.parseToJsonElement("""{"tableId":3}""")))
         assertEquals(7, frame.jsonObject["id"]!!.jsonPrimitive.content.toInt())
-        assertEquals("tableJoin", frame.jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("tableJoin", frame.jsonObject["request"]!!.jsonPrimitive.content)
         assertEquals(3, frame.jsonObject["data"]!!.jsonObject["tableId"]!!.jsonPrimitive.content.toInt())
     }
 
