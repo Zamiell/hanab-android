@@ -62,8 +62,8 @@ class WireAdapter(
                 put("replay", m.data.stage == TableStage.Replay)
             }))
         }
+        // Being booted from a table is the same message as leaving it now.
         is InTableLeft -> one("left", tableRef(m.data))
-        is InTableBooted -> one("boot", tableRef(m.data))
         is InChat -> chat(m.data)?.let { one("chat", it) }.orEmpty()
         is InChatList -> one("chatList", buildJsonObject { put("list", JsonArray(m.data.messages.mapNotNull(::chat))) })
         is InGameState -> gameState(m.data)
