@@ -370,10 +370,7 @@ object ProtocolConstants {
         MAX_TABLE_NAME_LENGTH, DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, DEFAULT_BASE_SECONDS,
         DEFAULT_PER_TURN_SECONDS, MAX_BASE_SECONDS, MAX_PER_TURN_SECONDS,
     );
-    for (name, value) in [
-        ("DEFAULT_VARIANT_NAME", hanabi_protocol::DEFAULT_VARIANT_NAME),
-        ("DEFAULT_TABLE_NAME_SUFFIX", hanabi_protocol::DEFAULT_TABLE_NAME_SUFFIX),
-    ] {
+    for (name, value) in [("DEFAULT_VARIANT_NAME", hanabi_protocol::DEFAULT_VARIANT_NAME)] {
         let _ = writeln!(out, "    const val {name} = {}", string_literal(value));
     }
     out.push_str("}

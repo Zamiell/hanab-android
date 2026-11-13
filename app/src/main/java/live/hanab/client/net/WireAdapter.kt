@@ -11,9 +11,13 @@ import live.hanab.client.game.Variants
 import live.hanab.client.protocol.*
 // The app's own models (Models.kt, the same package) have these names too; these are the website's.
 import live.hanab.client.protocol.ChatList
+import live.hanab.client.protocol.ChatMessage
 import live.hanab.client.protocol.Table
 import live.hanab.client.protocol.User
 import live.hanab.client.protocol.Welcome
+
+/** What a table that its creator does not name is called after them, as the website's client names it. */
+private const val DEFAULT_TABLE_NAME_SUFFIX = "'s table"
 
 /**
  * hanab.live's WebSocket protocol keeps changing (hanabi-live `server/protocol`), and its messages are read with the types
@@ -64,28 +68,33 @@ class WireAdapter(
         }
         // Being booted from a table is the same message as leaving it now.
         is InTableLeft -> one("left", tableRef(m.data))
-        is InChat -> chat(m.data)?.let { one("chat", it) }.orEmpty()
-        is InChatList -> one("chatList", buildJsonObject { put("list", JsonArray(m.data.messages.mapNotNull(::chat))) })
+        is InChat -> one("chat", chat(m.data))
+        // A table's chat list names its table once, not in each message.
+        is InChatList -> one("chatList", buildJsonObject {
+            put("list", JsonArray(m.data.messages.map { chat(it, m.data.table?.tableId) }))
+        })
         is InGameState -> gameState(m.data)
         is InGameEvent -> event(m.data.event)?.let {
             one("gameAction", buildJsonObject { put("tableID", m.data.tableId.toInt()); put("action", it) })
         }.orEmpty()
+        // The end of a game also brings every card and everyone's notes, which the players may now see.
         is InGameFinished -> listOf(
             ServerMessage("finishOngoingGame", buildJsonObject {
                 put("tableID", m.data.tableId.toInt())
-                put("databaseID", m.data.gameId ?: 0)
+                put("databaseID", m.data.view.gameId ?: 0)
                 put("sharedReplayLeader", m.data.sharedReplay.owner.username)
             }),
             cardIdentities(m.data.tableId, m.data.deck),
+            ServerMessage("noteList", noteList(m.data.tableId, m.data.notes)),
         )
+        // One author's note on one card changed.
         is InNote -> one("note", buildJsonObject {
             put("tableID", m.data.tableId.toInt())
             put("order", m.data.order)
-            put("notes", JsonArray(m.data.notes.map { n ->
-                buildJsonObject { put("name", n.username); put("text", n.text); put("isSpectator", n.spectator) }
-            }))
+            put("name", m.data.note.username)
+            put("text", m.data.note.text)
+            put("isSpectator", m.data.note.spectator)
         })
-        is InNoteList -> one("noteList", noteList(m.data.tableId, m.data.notes))
         is InVotes -> {
             voted = m.data.voted
             one("voteChange", buildJsonObject { put("vote", m.data.voted) })
@@ -104,8 +113,9 @@ class WireAdapter(
         is InInvalid -> unreadable(m.command, m.error)
         // The rest the app has no use for (yet).
         is InUnknown, is InBlocked, is InFriends, is InChatDeleted, is InChatTyping, is InClock, is InConnections,
-        is InGameHistoryAdded, is InIdleReset, is InIdleWarning, is InLobbyStatus, is InPause, is InServerRestart,
-        is InSpectators, is InTableOwner, is InTableRestartDecliners, is InTableSuggestion -> emptyList()
+        is InGameHistoryAdded, is InIdleReset, is InIdleWarning, is InLobbyStatus, is InPause, is InServerShutdown,
+        is InSpectators, is InTableOwner, is InTableRestartDecliners, is InTableSettingsSuggestion, is InTableSuggestion,
+        -> emptyList()
     }
 
     /**
@@ -114,7 +124,7 @@ class WireAdapter(
      */
     fun reply(r: Reply, tableId: Long? = null): List<ServerMessage> = when (r) {
         is ReplyChatPmHistory -> one("chatPMHistory", buildJsonObject {
-            put("list", JsonArray(r.data.messages.mapNotNull(::chat)))
+            put("list", JsonArray(r.data.messages.map { chat(it, null) }))
             put("hasMore", false)
         })
         // A game's setup is the answer to the request to load it now (it was a message of its own).
@@ -189,7 +199,7 @@ class WireAdapter(
             put("disconSpectatingTable", s.tableId.toInt())
             put("disconShadowingSeat", s.shadowingPlayerIndex ?: -1)
         }
-        put("randomTableName", "${w.username}${ProtocolConstants.DEFAULT_TABLE_NAME_SUFFIX}")
+        put("randomTableName", "${w.username}$DEFAULT_TABLE_NAME_SUFFIX")
     }
 
     private fun user(u: User): JsonObject = buildJsonObject {
@@ -249,14 +259,13 @@ class WireAdapter(
         put("detrimentalCharacters", o.detrimentalCharacters)
     }
 
-    /** A message of the chat, or null for the kinds the app does not show (a suggestion of table settings). */
-    private fun chat(c: Chat): JsonObject? {
+    /** A message of the chat, shown in the chat of [tableId] (the lobby's, or a private message's, without one). */
+    private fun chat(c: ChatMessage, tableId: TableId?): JsonObject {
         val author: ChatAuthor
         var recipient: String? = null
         when (val k = c.kind) {
             is ChatKindPublic -> author = k.author
             is ChatKindPrivate -> { author = k.author; recipient = k.recipient }
-            is ChatKindSettingsSuggestion -> return null
         }
         return buildJsonObject {
             put("msg", c.text)
@@ -268,9 +277,12 @@ class WireAdapter(
             put("datetime", c.sentAt)
             c.chatId?.let { put("chatID", it.toInt()) }
             recipient?.let { put("recipient", it) }
-            put("room", c.tableId?.let { "table${it.toInt()}" } ?: "lobby")
+            put("room", tableId?.let { "table${it.toInt()}" } ?: "lobby")
         }
     }
+
+    private fun chat(c: Chat): JsonObject =
+        chat(ChatMessage(chatId = c.chatId, kind = c.kind, sentAt = c.sentAt, text = c.text), c.tableId)
 
     private fun init(i: GameInit, tableId: TableId): JsonObject = buildJsonObject {
         timed = i.options.timeControl != null
@@ -288,7 +300,7 @@ class WireAdapter(
         put("spectating", mode !is ViewModePlaying)
         put("replay", mode is ViewModeSoloReplay || mode is ViewModeSharedReplay)
         put("sharedReplay", mode is ViewModeSharedReplay)
-        if (mode is ViewModeSharedReplay) put("sharedReplayLeader", mode.sharedReplay.owner.username)
+        // (A shared replay's leader comes with the game's state: see [gameState].)
         put("databaseID", when (mode) {
             is ViewModeSoloReplay -> mode.gameId ?: 0
             is ViewModeSharedReplay -> mode.gameId ?: 0
@@ -320,7 +332,17 @@ class WireAdapter(
             put("list", JsonArray(actions))
         }))
         when (val phase = s.phase) {
-            is GamePhaseReplay -> out += cardIdentities(s.tableId, phase.deck)
+            is GamePhaseReplay -> {
+                out += cardIdentities(s.tableId, phase.deck)
+                // What changes while people watch a shared replay: who leads it, and the turn it shows.
+                phase.sharedReplay?.let { r ->
+                    out += ServerMessage("replayLeader", buildJsonObject {
+                        put("tableID", tableId)
+                        put("name", r.owner.username)
+                    })
+                    out += ServerMessage("replaySegment", buildJsonObject { put("tableID", tableId); put("segment", r.turn) })
+                }
+            }
             is GamePhasePlaying -> phase.votes?.let { v ->
                 voted = v.voted
                 out += ServerMessage("voteChange", buildJsonObject { put("vote", v.voted) })

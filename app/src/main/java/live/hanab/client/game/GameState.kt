@@ -643,11 +643,15 @@ data class GameState(
         return copy(allNotes = byCard)
     }
 
-    /** Replace everyone's notes on one card (the server's live "note" update to spectators). */
+    /** Replace everyone's notes on one card. */
     fun withCardNotes(order: Int, entries: List<NoteEntry>): GameState {
         val shown = entries.filter { it.text.isNotBlank() }
         return copy(allNotes = if (shown.isEmpty()) allNotes - order else allNotes + (order to shown))
     }
+
+    /** Replace one author's note on one card (the server's live "note" update to spectators). */
+    fun withCardNote(order: Int, entry: NoteEntry): GameState =
+        withCardNotes(order, allNotes[order].orEmpty().filter { it.name != entry.name } + entry)
 
     fun withNotes(list: List<String>) =
         copy(notes = list.mapIndexedNotNull { order, t -> if (t.isBlank()) null else order to t }.toMap())

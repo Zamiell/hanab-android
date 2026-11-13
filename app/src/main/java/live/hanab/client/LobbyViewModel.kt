@@ -1,7 +1,6 @@
 package live.hanab.client
 
 import android.app.Application
-import android.text.Html
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
@@ -854,6 +853,9 @@ class LobbyViewModel(app: Application) : AndroidViewModel(app) {
                     ))
                 }
             }
+            "replayLeader" -> (m.data as? JsonObject)?.get("name")?.jsonPrimitive?.content?.let { name ->
+                _ui.update { it.copy(replay = it.replay?.copy(leader = name)) }
+            }
             "replaySegment" -> (m.data as? JsonObject)?.get("segment")?.jsonPrimitive?.intOrNull?.let { seg ->
                 _ui.update { it.copy(sharedSegment = seg) }
             }
@@ -933,20 +935,18 @@ class LobbyViewModel(app: Application) : AndroidViewModel(app) {
                     s.copy(game = g)
                 }
             }
+            // One author's note on one card changed (sent to spectators, not to its author).
             "note" -> (m.data as? JsonObject)?.let { d ->
                 val me = _ui.value.me?.username
                 val order = d["order"]?.jsonPrimitive?.intOrNull ?: return@let
-                val entries = (d["notes"] as? JsonArray).orEmpty().mapNotNull { e ->
-                    val o = e as? JsonObject ?: return@mapNotNull null
-                    NoteEntry(
-                        o["name"]?.jsonPrimitive?.content ?: return@mapNotNull null,
-                        o["text"]?.jsonPrimitive?.content.orEmpty(),
-                        (o["isSpectator"] as? JsonPrimitive)?.content == "true",
-                    )
-                }
+                val entry = NoteEntry(
+                    d["name"]?.jsonPrimitive?.content ?: return@let,
+                    d["text"]?.jsonPrimitive?.content.orEmpty(),
+                    (d["isSpectator"] as? JsonPrimitive)?.content == "true",
+                )
                 _ui.update { s ->
-                    var g = s.game?.withCardNotes(order, entries)
-                    entries.firstOrNull { it.name.equals(me, ignoreCase = true) }?.let { mine -> g = g?.withNote(order, mine.text) }
+                    var g = s.game?.withCardNote(order, entry)
+                    if (entry.name.equals(me, ignoreCase = true)) g = g?.withNote(order, entry.text)
                     s.copy(game = g)
                 }
             }
@@ -1014,8 +1014,7 @@ class LobbyViewModel(app: Application) : AndroidViewModel(app) {
     private fun isOurTable(c: ChatMessage) = c.room != null && c.room == "table${_ui.value.joinedTableID}"
 
     companion object {
-        /** Chat text arrives HTML-escaped. */
-        fun plain(html: String): String =
-            Html.fromHtml(html, Html.FROM_HTML_MODE_LEGACY).toString().trim()
+        /** Chat text is plain text (it was HTML until the website's a9500ad). */
+        fun plain(text: String): String = text.trim()
     }
 }

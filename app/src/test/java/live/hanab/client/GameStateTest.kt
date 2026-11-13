@@ -214,6 +214,10 @@ class GameStateTest {
         val updated = all.withCardNotes(1, listOf(NoteEntry("a", "", false), NoteEntry("watcher", "no, y5", true)))
         assertEquals(listOf("watcher"), updated.allNotes[1]!!.map { it.name })
         assertEquals(listOf("b"), updated.allNotes[0]!!.map { it.name })
+        // A change to one author's note keeps the other authors' notes on the card.
+        val one = all.withCardNote(1, NoteEntry("watcher", "no, y5", true))
+        assertEquals(setOf("a" to "r5", "watcher" to "no, y5"), one.allNotes[1]!!.map { it.name to it.text }.toSet())
+        assertEquals(listOf("a"), one.withCardNote(1, NoteEntry("watcher", "", true)).allNotes[1]!!.map { it.name })
     }
     /** Turn 1 (no clues or plays yet) can be stepped back to: the server sends no "turn" action for it. */
     @Test fun startingPositionIsAStop() {

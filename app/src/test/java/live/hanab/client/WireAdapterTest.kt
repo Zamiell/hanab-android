@@ -114,6 +114,42 @@ class WireAdapterTest {
         assertNull(server["who"])
     }
 
+    @Test fun aChatListNamesItsTableOnce() {
+        val message = """{"kind":{"type":"public","author":{"type":"user","username":"bob"}},"sentAt":"2026-11-11T07:08:44.337Z","text":"hi"}"""
+        fun rooms(json: String) = inbound("chatList", json).single().data!!.jsonObject["list"]!!.jsonArray.map { it.jsonObject["room"]!!.jsonPrimitive.content }
+        assertEquals(listOf("table5"), rooms("""{"messages":[$message],"table":{"tableId":5,"numUnread":0}}"""))
+        assertEquals(listOf("lobby"), rooms("""{"messages":[$message]}"""))
+    }
+
+    @Test fun aSharedReplayGetsItsLeaderAndTurnFromItsState() {
+        val state = inbound(
+            "gameState",
+            """{"events":[],"notes":[],"phase":{"type":"replay","deck":[],"sharedReplay":{"owner":{"userId":2,"username":"alice"},"turn":4,"efficiencyModifier":0,"restartDecliners":[]}},"spectators":[],"tableId":3}""",
+        )
+        val leader = state.single { it.command == "replayLeader" }.data!!.jsonObject
+        assertEquals("alice", leader["name"]!!.jsonPrimitive.content)
+        assertEquals(4, state.single { it.command == "replaySegment" }.data!!.jsonObject["segment"]!!.jsonPrimitive.int)
+    }
+
+    @Test fun aFinishedGameBringsItsCardsAndEveryonesNotes() {
+        val m = inbound(
+            "gameFinished",
+            """{"tableId":3,"finishedAt":"2026-11-11T07:09:51.884Z","deck":[{"suitIndex":0,"rank":1}],"events":[],"notes":[{"username":"bob","notes":["chop"],"spectator":false}],"view":{"gameId":77,"spoilerFree":false,"canPlayAgain":true,"replayStartedAt":"2026-11-11T07:09:51.884Z"},"sharedReplay":{"owner":{"userId":2,"username":"alice"},"turn":0,"efficiencyModifier":0,"restartDecliners":[]}}""",
+        )
+        assertEquals(listOf("finishOngoingGame", "cardIdentities", "noteList"), m.map { it.command })
+        assertEquals(77, m[0].data!!.jsonObject["databaseID"]!!.jsonPrimitive.int)
+        assertEquals("alice", m[0].data!!.jsonObject["sharedReplayLeader"]!!.jsonPrimitive.content)
+        assertEquals("bob", m[2].data!!.jsonObject["notes"]!!.jsonArray.single().jsonObject["name"]!!.jsonPrimitive.content)
+    }
+
+    @Test fun aNoteChangeIsOneAuthorsNote() {
+        val d = inbound("note", """{"tableId":3,"order":2,"note":{"username":"bob","text":"r5","spectator":true}}""").single().data!!.jsonObject
+        assertEquals(2, d["order"]!!.jsonPrimitive.int)
+        assertEquals("bob", d["name"]!!.jsonPrimitive.content)
+        assertEquals("r5", d["text"]!!.jsonPrimitive.content)
+        assertEquals("true", d["isSpectator"]!!.jsonPrimitive.content)
+    }
+
     @Test fun theGameStartsWithInitThenItsState() {
         val adapter = adapter()
         // Entering a table and the game starting are one message; its stage says which.
