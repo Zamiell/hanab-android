@@ -238,7 +238,7 @@ dependencies = [
 [[package]]
 name = "hanabi_protocol"
 version = "0.1.0"
-source = "git+https://github.com/Hanabi-Live/hanabi-live?rev=f1b8a236798944b890a1207bbe21a14d6ec5559b#f1b8a236798944b890a1207bbe21a14d6ec5559b"
+source = "git+https://github.com/Hanabi-Live/hanabi-live?rev=5719df78677ba42fd1b3716e56ff2d02484ac91d#5719df78677ba42fd1b3716e56ff2d02484ac91d"
 dependencies = [
  "anyhow",
  "chrono",

@@ -90,6 +90,10 @@ private val columnHeaders = mapOf(
     GridColumn.Strikeouts to "K.O.",
 )
 
+/** The columns shown: the website's page stopped giving an average and a strikeout rate, so those are dropped. */
+private fun columnsOf(ui: ProfileUi): List<GridColumn> =
+    GridColumn.entries.filter { (ui.scores?.hasAverages ?: true) || it == GridColumn.Variant || it <= GridColumn.Best6 }
+
 private fun sortKey(row: VariantRow, column: GridColumn): Comparable<*> = when (column) {
     GridColumn.Variant -> row.variant.lowercase()
     GridColumn.Games -> row.games
@@ -157,7 +161,7 @@ private fun StatsView(ui: ProfileUi, pvm: ProfileViewModel) {
             HorizontalDivider()
         }
         items(shown, key = { it.variant }) { row ->
-            GridRow(row, scroll)
+            GridRow(row, scroll, columnsOf(ui))
             HorizontalDivider()
         }
         item {
@@ -176,7 +180,7 @@ private fun GridHeader(ui: ProfileUi, scroll: androidx.compose.foundation.Scroll
             modifier = Modifier.width(NAME_WIDTH).clickable { onSort(GridColumn.Variant) }.padding(vertical = 8.dp),
         )
         Row(Modifier.horizontalScroll(scroll)) {
-            GridColumn.entries.drop(1).forEach { c ->
+            columnsOf(ui).drop(1).forEach { c ->
                 Text(
                     label(c), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
                     modifier = Modifier.width(NUMBER_WIDTH).clickable { onSort(c) }.padding(vertical = 8.dp),
@@ -187,7 +191,7 @@ private fun GridHeader(ui: ProfileUi, scroll: androidx.compose.foundation.Scroll
 }
 
 @Composable
-private fun GridRow(row: VariantRow, scroll: androidx.compose.foundation.ScrollState) {
+private fun GridRow(row: VariantRow, scroll: androidx.compose.foundation.ScrollState, columns: List<GridColumn>) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(row.variant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(NAME_WIDTH).padding(vertical = 8.dp))
         Row(Modifier.horizontalScroll(scroll), verticalAlignment = Alignment.CenterVertically) {
@@ -195,7 +199,8 @@ private fun GridRow(row: VariantRow, scroll: androidx.compose.foundation.ScrollS
             row.best.forEach { b ->
                 // A best of 0 is a size never played (or never scored); the max is the most the variant allows.
                 Cell(
-                    "${b.score}",
+                    // A marked score was made with an option, and still counts as a normal best.
+                    if (b.modified) "${b.score}*" else "${b.score}",
                     color = when {
                         b.score == b.max -> GOLD
                         b.score == 0 -> MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f)
@@ -204,8 +209,10 @@ private fun GridRow(row: VariantRow, scroll: androidx.compose.foundation.ScrollS
                     bold = b.score == b.max,
                 )
             }
-            Cell(row.average?.let { "%.1f".format(Locale.US, it) } ?: "-")
-            Cell(row.strikeoutRate?.let { "%.1f%%".format(Locale.US, it).replace(".0%", "%") } ?: "-")
+            if (GridColumn.Average in columns) Cell(row.average?.let { "%.1f".format(Locale.US, it) } ?: "-")
+            if (GridColumn.Strikeouts in columns) {
+                Cell(row.strikeoutRate?.let { "%.1f%%".format(Locale.US, it).replace(".0%", "%") } ?: "-")
+            }
         }
     }
 }

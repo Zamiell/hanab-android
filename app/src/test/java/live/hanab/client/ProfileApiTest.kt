@@ -6,8 +6,10 @@ import live.hanab.client.protocol.GamePage
 import live.hanab.client.protocol.ProtocolJson
 import live.hanab.client.net.parseScores
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProfileApiTest {
@@ -83,6 +85,9 @@ class ProfileApiTest {
         assertEquals(393, first.games)
         assertEquals(listOf(25, 25, 23, 0, 0), first.best.map { it.score })
         assertEquals(25, first.best[0].max)
+        // The page marks a score made with an option with an icon.
+        assertTrue(first.best[0].modified)
+        assertFalse(first.best[1].modified)
         assertEquals(23.1, first.average!!, 0.001)
         assertEquals(9.7, first.strikeoutRate!!, 0.001)
         assertNull(rows[1].average)
@@ -105,6 +110,59 @@ class ProfileApiTest {
         assertEquals(25, row.score)
         assertEquals("2026-10-25", row.date)
         assertEquals(listOf("RandP"), row.others("WillFlame"))
+    }
+
+    /**
+     * The site now draws the grid in the browser: the facts stay in the HTML and the rows arrive as JSON in the
+     * `data-table` attribute of `#public-page-table`. Trimmed from a real page.
+     */
+    @Test
+    fun readsTheGridTheSiteNowSends() {
+        val json = """
+            {"type":"scores","variants":[
+              {"variantName":"No Variant","maxScore":25,"numGames":1564,"bestScores":[{"score":25},{"score":25},{"score":25},{"score":25},{"score":25}]},
+              {"variantName":"Muddy Rainbow (6 Suits)","maxScore":30,"numGames":19,"bestScores":[{"score":30},{"score":30,"modifier":"deckPlays"},{},{},{}]},
+              {"variantName":"Omni & Black","maxScore":20,"numGames":0,"bestScores":[{},{},{},{},{}]}
+            ]}
+        """.trimIndent().replace("\n", "")
+        val html = """
+            <ul>
+              <li><span class="stat-description">Date joined:</span>March 31st, 2020</li>
+              <li><span class="stat-description">Games played (in non-speedruns):</span>484 (418 normally finished)</li>
+            </ul>
+            <div id="public-page-table" data-table="${json.replace("&", "&amp;").replace("\"", "&quot;")}"></div>
+        """.trimIndent()
+
+        val page = parseScores(html)!!
+        assertEquals(
+            listOf("Date joined" to "March 31st, 2020", "Games played (in non-speedruns)" to "484 (418 normally finished)"),
+            page.facts,
+        )
+        // The site sends no average or strikeout rate any more, so the grid must not claim to have them.
+        assertFalse(page.hasAverages)
+
+        val rows = page.rows
+        assertEquals(3, rows.size)
+        val noVariant = rows[0]
+        assertEquals("No Variant", noVariant.variant)
+        assertEquals(1564, noVariant.games)
+        assertEquals(listOf(25, 25, 25, 25, 25), noVariant.best.map { it.score })
+        assertEquals(listOf(25, 25, 25, 25, 25), noVariant.best.map { it.max })
+        assertTrue(noVariant.best.none { it.modified })
+
+        val muddy = rows[1]
+        assertEquals("Muddy Rainbow (6 Suits)", muddy.variant)
+        assertEquals(listOf(30, 30, 0, 0, 0), muddy.best.map { it.score })
+        assertEquals(listOf(30, 30, 30, 30, 30), muddy.best.map { it.max })
+        assertFalse(muddy.best[0].modified)
+        // A score made with an option still counts, but is marked.
+        assertTrue(muddy.best[1].modified)
+
+        // Entities in the attribute are decoded before the JSON is read.
+        assertEquals("Omni & Black", rows[2].variant)
+        assertEquals(0, rows[2].games)
+        assertTrue(rows[2].best.all { it.score == 0 })
+        assertNull(rows[2].average)
     }
 
     /** The grid lost its average and strikeout columns, and shows a dash for a table size nobody played. */

@@ -10,6 +10,9 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import live.hanab.client.protocol.GameSummary
 import live.hanab.client.protocol.GamePage
 import live.hanab.client.protocol.ProtocolJson
+import live.hanab.client.protocol.PublicPageTable
+import live.hanab.client.protocol.PublicPageTableScores
+import live.hanab.client.protocol.VariantScores
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
@@ -37,7 +40,12 @@ data class HistoryRow(
 data class HistoryPage(val total: Int, val rows: List<HistoryRow>)
 
 /** A player's best score in a variant at one table size; [max] is the most that variant allows. */
-data class BestScore(val score: Int, val max: Int)
+data class BestScore(
+    val score: Int,
+    val max: Int,
+    /** The score was made with an option (e.g. empty clues) that keeps it counting as a normal one. */
+    val modified: Boolean = false,
+)
 
 /** One row of the stats grid: how a player did in one variant. */
 data class VariantRow(
@@ -51,7 +59,12 @@ data class VariantRow(
 )
 
 /** What the website's profile page ("/scores/<name>") shows: the facts at the top and the grid of variants. */
-data class ProfilePage(val facts: List<Pair<String, String>>, val rows: List<VariantRow>)
+data class ProfilePage(
+    val facts: List<Pair<String, String>>,
+    val rows: List<VariantRow>,
+    /** False when the rows have no [VariantRow.average] or [VariantRow.strikeoutRate] to show (the website's page). */
+    val hasAverages: Boolean = true,
+)
 
 /** The site says this (HTTP 404) when the name is not a player. */
 class NoSuchPlayer : Exception("That player does not exist.")
@@ -125,6 +138,12 @@ private val ROW = Regex("""<tr>(.*?)</tr>""", RegexOption.DOT_MATCHES_ALL)
 private val CELL = Regex("""<td[^>]*>(.*?)</td>""", RegexOption.DOT_MATCHES_ALL)
 private val TAG = Regex("""<[^>]+>""")
 private val SCORE = Regex("""(\d+)\s*/\s*(\d+)""")
+/** The icon the page puts next to a score made with an option, marking it as still a normal score. */
+private val MODIFIER = "score-modifier"
+
+/** The grid of a profile page: the JSON that `public-pages` draws into `#public-page-table`. */
+private val TABLE = Regex("""id="public-page-table"[^>]*\sdata-table="([^"]*)"""")
+private val ATTRIBUTE_ENTITY = Regex("""&(?:#(\d+)|#x([0-9a-fA-F]+)|(amp|lt|gt|quot|#39));""")
 
 /** The text of a bit of HTML: tags gone, entities decoded, whitespace collapsed. */
 private fun text(html: String): String =
@@ -133,18 +152,63 @@ private fun text(html: String): String =
         .replace("&#39;", "'").replace("&#x27;", "'").replace("&amp;", "&")
         .replace(Regex("""\s+"""), " ").trim()
 
-/** Reads the website's profile page; null if it does not have the facts and the grid. */
+/** An attribute value as the HTML source spells it: entities decoded, since `data-table` holds JSON in one. */
+private fun attributeValue(raw: String): String =
+    ATTRIBUTE_ENTITY.replace(raw) { m ->
+        val named = m.groupValues[3]
+        when {
+            named == "amp" -> "&"
+            named == "lt" -> "<"
+            named == "gt" -> ">"
+            named == "quot" -> "\""
+            named.isNotEmpty() -> "'"
+            m.groupValues[1].isNotEmpty() -> m.groupValues[1].toIntOrNull()?.let { String(Character.toChars(it)) } ?: m.value
+            else -> m.groupValues[2].toIntOrNull(16)?.let { String(Character.toChars(it)) } ?: m.value
+        }
+    }
+
+/**
+ * Reads the website's profile page; null if it has neither grid. The grid is JSON in `data-table` (the page's
+ * script draws it), so the best scores come from the site's own contract. A page from before that change still
+ * has its table in the HTML, so that is read as well.
+ */
 fun parseScores(html: String): ProfilePage? {
+    val table = html.indexOf("id=\"public-page-table\"")
+    val grid = TABLE.find(html)?.groupValues?.get(1)?.let { runCatching { ProtocolJson.decodeFromString(PublicPageTable.serializer(), attributeValue(it)) }.getOrNull() }
+    if (grid is PublicPageTableScores) {
+        val facts = FACT.findAll(if (table < 0) html else html.substring(0, table))
+            .map { text(it.groupValues[1]).trimEnd(':') to text(it.groupValues[2]) }
+            .toList()
+        return ProfilePage(facts, grid.variants.map(::variantRow), hasAverages = false)
+    }
+    return parseLegacyScores(html)
+}
+
+/** One variant of the site's grid, with a row for each table size (2 to 6 players, in that order). */
+private fun variantRow(v: VariantScores): VariantRow {
+    val best = (0 until 5).map { i ->
+        val b = v.bestScores.getOrNull(i)
+        BestScore(b?.score ?: 0, v.maxScore, modified = b?.modifier != null)
+    }
+    return VariantRow(v.variantName, v.numGames.toInt(), best, average = null, strikeoutRate = null)
+}
+
+/** The table that profile pages had before it became a JSON blob; null if this page has no such table. */
+private fun parseLegacyScores(html: String): ProfilePage? {
     val table = html.indexOf("<table class=\"history\"")
     if (table < 0) return null
     val facts = FACT.findAll(html.substring(0, table)).map { text(it.groupValues[1]).trimEnd(':') to text(it.groupValues[2]) }.toList()
     val body = html.substring(table).substringAfter("<tbody>", "").substringBefore("</tbody>")
     val rows = ROW.findAll(body).mapNotNull { row ->
-        val cells = CELL.findAll(row.groupValues[1]).map { text(it.groupValues[1]) }.toList()
+        // Each cell kept as HTML as well as text: a marked score has an icon next to it.
+        val raw = CELL.findAll(row.groupValues[1]).map { it.groupValues[1] }.toList()
+        val cells = raw.map { text(it) }
         // The grid has the total and the five best scores; older pages also had the average and the strikeout rate.
         if (cells.size < 7) return@mapNotNull null
         // A table size nobody played shows a dash: no score yet, out of what the other sizes show.
-        val found = cells.subList(2, 7).map { c -> SCORE.find(c)?.let { BestScore(it.groupValues[1].toInt(), it.groupValues[2].toInt()) } }
+        val found = cells.subList(2, 7).mapIndexed { i, c ->
+            SCORE.find(c)?.let { BestScore(it.groupValues[1].toInt(), it.groupValues[2].toInt(), modified = MODIFIER in raw[i + 2]) }
+        }
         val max = found.firstNotNullOfOrNull { it?.max } ?: 0
         VariantRow(
             variant = cells[0],
